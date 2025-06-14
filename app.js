@@ -333,7 +333,8 @@ class CadastralDataApp {
             
             if (data.length === 0) {
                 console.warn('No taluka data found');
-                dropdown.append('<option value="">No data available</option>');
+                dropdown.append('<option value="">No data available</option>')
+                       .prop('disabled', false);
                 return;
             }
             
@@ -345,9 +346,15 @@ class CadastralDataApp {
                 `);
             });
             
+            // Enable the dropdown once data is loaded
+            dropdown.prop('disabled', false);
+            
             console.log(`Successfully populated ${data.length} talukas in dropdown`);
         } catch (error) {
             console.error('Error in populateTalukaDropdown:', error);
+            const dropdown = $('#taluka-dropdown');
+            dropdown.empty().append('<option value="">Error loading talukas</option>')
+                   .prop('disabled', false);
             throw error;
         } finally {
             await connection.close();
