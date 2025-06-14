@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parquet File Debug - GitHub Pages</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        button { padding: 10px 20px; margin: 5px; background-color: #007cba; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #005a8b; }
+        code { background-color: #f8f9fa; padding: 2px 5px; border-radius: 3px; }
+        pre { background-color: #f8f9fa; padding: 10px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Parquet File Debug - GitHub Pages</h1>
+    <p>This page helps debug parquet file loading issues on GitHub Pages.</p>
+    
+    <div class="info result">
+        <strong>Current URL:</strong> <code id="current-url"></code><br>
+        <strong>Origin:</strong> <code id="origin"></code><br>
+        <strong>Pathname:</strong> <code id="pathname"></code>
+    </div>
+
+    <button onclick="testFileAccess()">Test File Access</button>
+    <button onclick="testMultipleStrategies()">Test All URL Strategies</button>
+    <button onclick="downloadFile()">Download Test File</button>
+    
+    <div id="results"></div>
+
+    <script>
+        // Display current URL info
+        document.getElementById('current-url').textContent = window.location.href;
+        document.getElementById('origin').textContent = window.location.origin;
+        document.getElementById('pathname').textContent = window.location.pathname;
+
+        async function testFileAccess() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="info result">Testing file access...</div>';
+            
+            const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
+            const fileUrl = `${baseUrl}/data/talukas.parquet`;
+            
+            try {
+                const response = await fetch(fileUrl);
+                const status = response.status;
+                const statusText = response.statusText;
+                const contentType = response.headers.get('content-type');
+                const contentLength = response.headers.get('content-length');
+                
+                let resultClass = response.ok ? 'success' : 'error';
+                let message = `
+                    <strong>URL:</strong> <code>${fileUrl}</code><br>
+                    <strong>Status:</strong> ${status} ${statusText}<br>
+                    <strong>Content-Type:</strong> ${contentType || 'Not set'}<br>
+                    <strong>Content-Length:</strong> ${contentLength || 'Not set'}<br>
+                `;
+                
+                if (response.ok) {
+                    // Try to read a few bytes to check if it's actually readable
+                    try {
+                        const arrayBuffer = await response.arrayBuffer();
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        const firstBytes = Array.from(uint8Array.slice(0, 10)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ');
+                        
+                        message += `<strong>File Size:</strong> ${arrayBuffer.byteLength} bytes<br>`;
+                        message += `<strong>First 10 bytes:</strong> <code>${firstBytes}</code><br>`;
+                        
+                        // Check for parquet magic bytes
+                        if (uint8Array.length >= 4) {
+                            const magicBytes = Array.from(uint8Array.slice(0, 4));
+                            const isParquet = magicBytes[0] === 0x50 && magicBytes[1] === 0x41 && magicBytes[2] === 0x52 && magicBytes[3] === 0x31;
+                            message += `<strong>Parquet Magic Bytes:</strong> ${isParquet ? '✓ Found' : '✗ Not found'}<br>`;
+                        }
+                    } catch (readError) {
+                        message += `<strong>Read Error:</strong> ${readError.message}<br>`;
+                        resultClass = 'warning';
+                    }
+                }
+                
+                resultsDiv.innerHTML = `<div class="${resultClass} result">${message}</div>`;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error result">
+                    <strong>Error:</strong> ${error.message}<br>
+                    <strong>URL:</strong> <code>${fileUrl}</code>
+                </div>`;
+            }
+        }
+
+        async function testMultipleStrategies() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="info result">Testing multiple URL strategies...</div>';
+            
+            const strategies = [
+                {
+                    name: 'Current approach',
+                    url: () => {
+                        const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
+                        return `${baseUrl}/data/talukas.parquet`;
+                    }
+                },
+                {
+                    name: 'Direct relative path',
+                    url: () => './data/talukas.parquet'
+                },
+                {
+                    name: 'Absolute path from root',
+                    url: () => `${window.location.origin}${window.location.pathname.split('/').slice(0, -1).join('/')}/data/talukas.parquet`
+                },
+                {
+                    name: 'Using repo name',
+                    url: () => {
+                        const pathParts = window.location.pathname.split('/').filter(p => p);
+                        if (pathParts.length > 0) {
+                            return `${window.location.origin}/${pathParts[0]}/data/talukas.parquet`;
+                        }
+                        return null;
+                    }
+                }
+            ];
+
+            let results = '<h3>URL Strategy Test Results:</h3>';
+            
+            for (let i = 0; i < strategies.length; i++) {
+                const strategy = strategies[i];
+                const fileUrl = strategy.url();
+                
+                if (!fileUrl) {
+                    results += `<div class="warning result">
+                        <strong>Strategy ${i + 1}: ${strategy.name}</strong><br>
+                        URL: <em>Not applicable</em>
+                    </div>`;
+                    continue;
+                }
+                
+                try {
+                    const response = await fetch(fileUrl, { method: 'HEAD' });
+                    const resultClass = response.ok ? 'success' : 'error';
+                    
+                    results += `<div class="${resultClass} result">
+                        <strong>Strategy ${i + 1}: ${strategy.name}</strong><br>
+                        URL: <code>${fileUrl}</code><br>
+                        Status: ${response.status} ${response.statusText}<br>
+                        Content-Length: ${response.headers.get('content-length') || 'Not set'}
+                    </div>`;
+                } catch (error) {
+                    results += `<div class="error result">
+                        <strong>Strategy ${i + 1}: ${strategy.name}</strong><br>
+                        URL: <code>${fileUrl}</code><br>
+                        Error: ${error.message}
+                    </div>`;
+                }
+            }
+            
+            resultsDiv.innerHTML = results;
+        }
+
+        async function downloadFile() {
+            const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
+            const fileUrl = `${baseUrl}/data/talukas.parquet`;
+            
+            try {
+                const response = await fetch(fileUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+                }
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'talukas.parquet';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                document.getElementById('results').innerHTML = `<div class="success result">
+                    File download initiated. Check your downloads folder.
+                </div>`;
+            } catch (error) {
+                document.getElementById('results').innerHTML = `<div class="error result">
+                    <strong>Download Error:</strong> ${error.message}
+                </div>`;
+            }
+        }
+    </script>
+</body>
+</html> 

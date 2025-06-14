@@ -204,23 +204,91 @@ class CadastralDataApp {
         const connection = await this.db.connect();
         
         try {
-            // Use full HTTP URL to load parquet file
-            // This works for both localhost and GitHub Pages
-            const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
-            const fileUrl = `${baseUrl}/data/${filename}`;
-            console.log(`Loading from URL: ${fileUrl}`);
+            // Try multiple URL strategies for GitHub Pages compatibility
+            const urlStrategies = [
+                // Strategy 1: Current approach
+                () => {
+                    const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
+                    return `${baseUrl}/data/${filename}`;
+                },
+                // Strategy 2: Direct relative path (for GitHub Pages root deployment)
+                () => `./data/${filename}`,
+                // Strategy 3: Absolute path from root
+                () => `${window.location.origin}${window.location.pathname.split('/').slice(0, -1).join('/')}/data/${filename}`,
+                // Strategy 4: Using repo name if available
+                () => {
+                    const pathParts = window.location.pathname.split('/').filter(p => p);
+                    if (pathParts.length > 0) {
+                        return `${window.location.origin}/${pathParts[0]}/data/${filename}`;
+                    }
+                    return null;
+                }
+            ];
+
+            let lastError = null;
             
-            await connection.query(`
-                CREATE TABLE ${tableName} AS 
-                SELECT * FROM read_parquet('${fileUrl}')
-            `);
+            for (let i = 0; i < urlStrategies.length; i++) {
+                const fileUrl = urlStrategies[i]();
+                if (!fileUrl) continue;
+                
+                console.log(`Trying strategy ${i + 1}: ${fileUrl}`);
+                
+                try {
+                    // First, let's verify the URL is accessible
+                    const response = await fetch(fileUrl, { method: 'HEAD' });
+                    console.log(`File check for ${filename}: Status ${response.status}, Content-Length: ${response.headers.get('content-length')}, Content-Type: ${response.headers.get('content-type')}`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`File not accessible: HTTP ${response.status} ${response.statusText}`);
+                    }
+                    
+                    const contentLength = response.headers.get('content-length');
+                    if (contentLength === '0' || contentLength === null) {
+                        console.warn(`Warning: File ${filename} appears to be empty or content-length not set`);
+                    }
+                    
+                    // Try to load with DuckDB
+                    await connection.query(`
+                        CREATE TABLE ${tableName} AS 
+                        SELECT * FROM read_parquet('${fileUrl}')
+                    `);
+                    
+                    this.loadedFiles.add(tableName);
+                    console.log(`Successfully loaded ${tableName} table using strategy ${i + 1}`);
+                    return; // Success!
+                    
+                } catch (strategyError) {
+                    console.warn(`Strategy ${i + 1} failed for ${filename}:`, strategyError.message);
+                    lastError = strategyError;
+                    continue; // Try next strategy
+                }
+            }
             
-            this.loadedFiles.add(tableName);
-            console.log(`Successfully loaded ${tableName} table`);
+            // If we get here, all strategies failed
+            throw lastError || new Error('All loading strategies failed');
+            
         } catch (error) {
             console.error(`Error loading ${filename}:`, error);
-            console.error(`Attempted URL: ${window.location.origin}/data/${filename}`);
-            throw error;
+            
+            // Enhanced error reporting
+            if (error.message.includes('magic bytes')) {
+                console.error('Magic bytes error suggests file corruption, wrong content-type, or incomplete download');
+                console.error('This commonly happens when GitHub Pages serves binary files incorrectly');
+                console.error('Possible solutions:');
+                console.error('1. Check if file is properly committed to git');
+                console.error('2. Ensure .gitattributes marks *.parquet as binary');
+                console.error('3. Consider using Git LFS for large files');
+                console.error('4. Try re-committing the parquet files');
+                console.error('5. Check GitHub Pages deployment logs');
+            }
+            
+            // Provide user-friendly error message
+            const userError = new Error(
+                error.message.includes('magic bytes') 
+                    ? `Unable to load ${filename}. This appears to be a GitHub Pages deployment issue with binary files. Please check the browser console for detailed troubleshooting steps.`
+                    : `Failed to load ${filename}: ${error.message}`
+            );
+            throw userError;
         } finally {
             await connection.close();
         }

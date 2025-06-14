@@ -1,0 +1,12 @@
+# Ensure parquet files are treated as binary
+*.parquet binary
+
+# Set LFS tracking for large files if needed (uncomment if using Git LFS)
+# *.parquet filter=lfs diff=lfs merge=lfs -text
+
+# Ensure proper line endings for text files
+*.js text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf 
