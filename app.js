@@ -16,6 +16,10 @@ class CadastralDataApp {
         try {
             console.log('Initializing DuckDB...');
             
+            // Show loading indicators
+            $('#loading').show();
+            $('#taluka-dropdown').empty().append('<option value="">Loading talukas...</option>').prop('disabled', true);
+            
             // Initialize DuckDB using the correct method names
             const bundles = duckdb.getJsDelivrBundles();
             const bundle = await duckdb.selectBundle(bundles);
@@ -51,10 +55,14 @@ class CadastralDataApp {
             // Load initial dropdown data
             await this.loadDropdownData();
             this.setupEventListeners();
+            
+            // Hide main loading indicator
+            $('#loading').hide();
         } catch (error) {
             console.error('Failed to initialize DuckDB:', error);
             console.error('Error details:', error);
-            $('#taluka-dropdown').append('<option value="">Failed to initialize database</option>');
+            $('#taluka-dropdown').empty().append('<option value="">Failed to initialize database</option>').prop('disabled', false);
+            $('#loading').hide();
         }
     }
 
