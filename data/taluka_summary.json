@@ -1,0 +1,31 @@
+{
+  "total_talukas": 16,
+  "total_villages": 426,
+  "total_unique_villages": 404,
+  "talukas": [
+    "BARDEZ",
+    "BICHOLIM",
+    "CANACONA",
+    "DHARBANDORA",
+    "MORMUGAO",
+    "Mapusa",
+    "Margao",
+    "PERNEM",
+    "PONDA",
+    "Panaji",
+    "QUEPEM",
+    "SALCETE",
+    "SANGUEM",
+    "SATTARI",
+    "TISWADI",
+    "Vasco"
+  ],
+  "files_created": [
+    "talukas.parquet",
+    "taluka_village_mapping.parquet"
+  ],
+  "usage_notes": {
+    "talukas.parquet": "Contains unique talukas with village counts - use for dropdown population",
+    "taluka_village_mapping.parquet": "Contains all taluka-village pairs - use to filter villages by selected taluka"
+  }
+}

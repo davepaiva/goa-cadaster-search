@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cadastral Data Viewer</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- MapLibre GL JS -->
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        .controls select, .controls button {
+            margin: 5px;
+            padding: 8px;
+            font-size: 14px;
+        }
+        #map {
+            width: 100%;
+            height: 500px;
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .map-controls {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .map-controls button {
+            margin: 5px;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>Goa Cadastral Data Explorer</h1>
+        
+        <!-- Bulk Search Section -->
+        <div class="bulk-search-section" style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0;">Bulk Search</h3>
+            <p style="margin: 5px 0; font-size: 14px; color: #666;">
+                Upload a CSV file to search multiple records at once. 
+                CSV should have columns: <strong>village, survey, subdiv</strong> (header row required)
+            </p>
+            <div style="margin: 10px 0;">
+                <input type="file" id="csv-upload" accept=".csv" style="margin-right: 10px;">
+                <button id="process-csv" disabled style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    Process CSV
+                </button>
+                <button id="download-template" style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">
+                    Download Template
+                </button>
+            </div>
+            <div id="csv-status" style="font-size: 12px; margin-top: 5px;"></div>
+        </div>
+        
+        <!-- Individual Search Section -->
+        <div class="individual-search-section">
+            <h3>Individual Search</h3>
+            <!-- Dropdowns -->
+            <div class="controls">
+                <select id="taluka-dropdown">
+                    <option value="">Select Taluka</option>
+                </select>
+                
+                <select id="village-dropdown" disabled>
+                    <option value="">Select Village</option>
+                </select>
+                
+                <select id="survey-dropdown" disabled>
+                    <option value="">Select Survey No (Optional)</option>
+                </select>
+                
+                <select id="subdiv-dropdown" disabled>
+                    <option value="">Select Subdiv (Optional)</option>
+                </select>
+                
+                <button id="load-data">Load Data</button>
+            </div>
+        </div>
+        
+        <!-- Results -->
+        <div id="loading" style="display:none;">Loading...</div>
+        <div id="results"></div>
+        
+        <!-- Map -->
+        <div id="map-container" style="display:none;">
+            <h3>Map View</h3>
+            <div class="map-controls">
+                <button id="fit-bounds">Fit to Data</button>
+                <button id="toggle-labels">Toggle Labels</button>
+                <button id="clear-map">Clear Map</button>
+                <span id="map-info" style="margin-left: 15px; font-size: 12px; color: #666;"></span>
+            </div>
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
