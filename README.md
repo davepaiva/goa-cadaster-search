@@ -2,7 +2,7 @@
 [Live URL](https://davepaiva.github.io/goa-cadastral-duckdb-demo/)
 
 
-This is a simple tool that allows us to search any plot via its survey number. Implemented as discussed in the GitHub issue: [Search by revenue village, plot number #78](https://github.com/publicmap/amche-atlas/issues/78).
+This is a simple tool that allows us to search any plot in Goa via its survey number. Implemented as discussed in the GitHub issue: [Search by revenue village, plot number #78](https://github.com/publicmap/amche-atlas/issues/78).
 
 ## Background
 
