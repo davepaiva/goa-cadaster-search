@@ -1034,10 +1034,10 @@ ${formattedGeojson}
     }
 
     downloadCsvTemplate() {
-        const csvContent = `village,survey,subdiv
-Panaji,123,A
-Margao,456,B
-Vasco,789,C`;
+        const csvContent = `taluka,village,survey,subdiv
+Tiswadi,Panaji,123,A
+Salcete,Margao,456,B
+Mormugao,Vasco,789,C`;
         
         const blob = new Blob([csvContent], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
@@ -1103,6 +1103,7 @@ Vasco,789,C`;
         }
 
         const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const talukaIndex = headers.indexOf('taluka');
         const villageIndex = headers.indexOf('village');
         const surveyIndex = headers.indexOf('survey');
         const subdivIndex = headers.indexOf('subdiv');
@@ -1111,12 +1112,17 @@ Vasco,789,C`;
             throw new Error('CSV must have a "village" column');
         }
 
+        if (talukaIndex === -1) {
+            throw new Error('CSV must have a "taluka" column');
+        }
+
         const searchCriteria = [];
         for (let i = 1; i < lines.length; i++) {
             const values = lines[i].split(',').map(v => v.trim());
             
-            if (values.length >= headers.length && values[villageIndex]) {
+            if (values.length >= headers.length && values[villageIndex] && values[talukaIndex]) {
                 searchCriteria.push({
+                    taluka: values[talukaIndex],
                     village: values[villageIndex],
                     survey: surveyIndex !== -1 ? values[surveyIndex] : null,
                     subdiv: subdivIndex !== -1 ? values[subdivIndex] : null
@@ -1143,7 +1149,7 @@ Vasco,789,C`;
                     allMapFeatures.push(...results.mapFeatures);
                     if (results.hasGeometry) hasGeometry = true;
                 } catch (error) {
-                    console.warn(`Error searching for ${criteria.village}/${criteria.survey}/${criteria.subdiv}:`, error);
+                    console.warn(`Error searching for ${criteria.taluka}/${criteria.village}/${criteria.survey}/${criteria.subdiv}:`, error);
                 }
             }
 
@@ -1182,6 +1188,12 @@ Vasco,789,C`;
         try {
             let whereClause = '';
             let filters = [];
+            
+            // Add taluka filter to ensure we match the correct taluka
+            if (criteria.taluka) {
+                const escapedTaluka = criteria.taluka.replace(/'/g, "''");
+                filters.push(`taluka = '${escapedTaluka}'`);
+            }
             
             if (criteria.survey) {
                 const escapedSurvey = criteria.survey.replace(/'/g, "''");
