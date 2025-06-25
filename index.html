@@ -11,16 +11,15 @@
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            padding: 15px;
-            background-color: #f0f2f5;
+            padding: 0;
+            background-color: #fff;
         }
         #app {
-            max-width: 1200px;
-            margin: 0 auto;
             background: #fff;
             padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 0;
+            min-height: 100vh;
+            box-sizing: border-box;
         }
         h1, h3 {
             color: #333;
@@ -75,17 +74,45 @@
             flex-grow: 1;
         }
         .bulk-search-controls button {
-            padding: 8px 16px;
-            color: white;
-            border: none;
+            padding: 10px 16px;
             border-radius: 4px;
             cursor: pointer;
+            transition: all 0.2s ease;
         }
         #process-csv {
-             background: #17a2b8;
+             background: #007bff;
+             color: white;
+             border: none;
         }
         #download-template {
+            background: transparent;
+            color: #6c757d;
+            border: 1px solid #6c757d;
+        }
+        #download-template:hover {
             background: #6c757d;
+            color: white;
+        }
+        
+        /* OR divider styling */
+        .or-divider {
+            display: flex;
+            align-items: center;
+            margin: 20px 0;
+            gap: 15px;
+        }
+        .or-divider::before,
+        .or-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #dee2e6;
+        }
+        .or-divider span {
+            color: #6c757d;
+            font-weight: 500;
+            font-size: 14px;
+            white-space: nowrap;
         }
         #csv-status {
             font-size: 12px;
@@ -142,9 +169,6 @@
         }
 
         @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
             #app {
                 padding: 15px;
             }
@@ -200,6 +224,11 @@
                 </button>
             </div>
             <div id="csv-status"></div>
+        </div>
+        
+        <!-- OR Divider -->
+        <div class="or-divider">
+            <span>OR</span>
         </div>
         
         <!-- Individual Search Section -->
