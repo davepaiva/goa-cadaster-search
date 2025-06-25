@@ -627,18 +627,19 @@ class CadastralDataApp {
         let html = `
             <h3>Cadastral Data${filterText} (${data.length} records)</h3>
             <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <table border="1" style="width:100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th>Taluka</th>
-                        <th>Village</th>
-                        <th>Survey</th>
-                        <th>Subdiv</th>
-                        <th>Records</th>
-                        <th>Geometry</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Taluka</th>
+                            <th>Village</th>
+                            <th>Survey</th>
+                            <th>Subdiv</th>
+                            <th>Records</th>
+                            <th>Geometry</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
 
         // Collect valid GeoJSON features for the map
@@ -765,7 +766,7 @@ ${formattedGeojson}
             `;
         });
 
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         
         // Add the JavaScript function for toggling geometry display
         html += `
@@ -1298,18 +1299,19 @@ Mormugao,Vasco,789,C`;
         let html = `
             <h3>Bulk Search Results (${data.length} records from ${searchCount} searches)</h3>
             <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <table border="1" style="width:100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th>Taluka</th>
-                        <th>Village</th>
-                        <th>Survey</th>
-                        <th>Subdiv</th>
-                        <th>Records</th>
-                        <th>Geometry</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Taluka</th>
+                            <th>Village</th>
+                            <th>Survey</th>
+                            <th>Subdiv</th>
+                            <th>Records</th>
+                            <th>Geometry</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
 
         data.forEach((row, index) => {
@@ -1405,7 +1407,7 @@ ${formattedGeojson}
             `;
         });
 
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         
         // Add the JavaScript functions (same as before)
         html += `
