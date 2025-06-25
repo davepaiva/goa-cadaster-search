@@ -627,18 +627,19 @@ class CadastralDataApp {
         let html = `
             <h3>Cadastral Data${filterText} (${data.length} records)</h3>
             <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <table border="1" style="width:100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th>Taluka</th>
-                        <th>Village</th>
-                        <th>Survey</th>
-                        <th>Subdiv</th>
-                        <th>Records</th>
-                        <th>Geometry</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Taluka</th>
+                            <th>Village</th>
+                            <th>Survey</th>
+                            <th>Subdiv</th>
+                            <th>Records</th>
+                            <th>Geometry</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
 
         // Collect valid GeoJSON features for the map
@@ -765,7 +766,7 @@ ${formattedGeojson}
             `;
         });
 
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         
         // Add the JavaScript function for toggling geometry display
         html += `
@@ -1034,10 +1035,10 @@ ${formattedGeojson}
     }
 
     downloadCsvTemplate() {
-        const csvContent = `village,survey,subdiv
-Panaji,123,A
-Margao,456,B
-Vasco,789,C`;
+        const csvContent = `taluka,village,survey,subdiv
+Tiswadi,Panaji,123,A
+Salcete,Margao,456,B
+Mormugao,Vasco,789,C`;
         
         const blob = new Blob([csvContent], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
@@ -1103,6 +1104,7 @@ Vasco,789,C`;
         }
 
         const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const talukaIndex = headers.indexOf('taluka');
         const villageIndex = headers.indexOf('village');
         const surveyIndex = headers.indexOf('survey');
         const subdivIndex = headers.indexOf('subdiv');
@@ -1111,12 +1113,17 @@ Vasco,789,C`;
             throw new Error('CSV must have a "village" column');
         }
 
+        if (talukaIndex === -1) {
+            throw new Error('CSV must have a "taluka" column');
+        }
+
         const searchCriteria = [];
         for (let i = 1; i < lines.length; i++) {
             const values = lines[i].split(',').map(v => v.trim());
             
-            if (values.length >= headers.length && values[villageIndex]) {
+            if (values.length >= headers.length && values[villageIndex] && values[talukaIndex]) {
                 searchCriteria.push({
+                    taluka: values[talukaIndex],
                     village: values[villageIndex],
                     survey: surveyIndex !== -1 ? values[surveyIndex] : null,
                     subdiv: subdivIndex !== -1 ? values[subdivIndex] : null
@@ -1143,7 +1150,7 @@ Vasco,789,C`;
                     allMapFeatures.push(...results.mapFeatures);
                     if (results.hasGeometry) hasGeometry = true;
                 } catch (error) {
-                    console.warn(`Error searching for ${criteria.village}/${criteria.survey}/${criteria.subdiv}:`, error);
+                    console.warn(`Error searching for ${criteria.taluka}/${criteria.village}/${criteria.survey}/${criteria.subdiv}:`, error);
                 }
             }
 
@@ -1182,6 +1189,12 @@ Vasco,789,C`;
         try {
             let whereClause = '';
             let filters = [];
+            
+            // Add taluka filter to ensure we match the correct taluka
+            if (criteria.taluka) {
+                const escapedTaluka = criteria.taluka.replace(/'/g, "''");
+                filters.push(`taluka = '${escapedTaluka}'`);
+            }
             
             if (criteria.survey) {
                 const escapedSurvey = criteria.survey.replace(/'/g, "''");
@@ -1286,18 +1299,19 @@ Vasco,789,C`;
         let html = `
             <h3>Bulk Search Results (${data.length} records from ${searchCount} searches)</h3>
             <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <table border="1" style="width:100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th>Taluka</th>
-                        <th>Village</th>
-                        <th>Survey</th>
-                        <th>Subdiv</th>
-                        <th>Records</th>
-                        <th>Geometry</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Taluka</th>
+                            <th>Village</th>
+                            <th>Survey</th>
+                            <th>Subdiv</th>
+                            <th>Records</th>
+                            <th>Geometry</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
 
         data.forEach((row, index) => {
@@ -1393,7 +1407,7 @@ ${formattedGeojson}
             `;
         });
 
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         
         // Add the JavaScript functions (same as before)
         html += `
