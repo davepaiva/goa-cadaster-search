@@ -2,6 +2,7 @@
 <html>
 <head>
     <title>Cadastral Data Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- MapLibre GL JS -->
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -9,15 +10,39 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 20px;
+            margin: 0;
+            padding: 15px;
+            background-color: #f0f2f5;
+        }
+        #app {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1, h3 {
+            color: #333;
         }
         .controls {
             margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         .controls select, .controls button {
-            margin: 5px;
-            padding: 8px;
+            padding: 10px;
             font-size: 14px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            flex: 1 1 200px;
+        }
+        .controls button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
         }
         #map {
             width: 100%;
@@ -26,6 +51,47 @@
             border: 1px solid #ccc;
             border-radius: 5px;
         }
+        .bulk-search-section, .individual-search-section {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .bulk-search-section h3, .individual-search-section h3 {
+            margin-top: 0;
+        }
+        .bulk-search-section p {
+            margin: 5px 0 15px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .bulk-search-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        #csv-upload {
+            flex-grow: 1;
+        }
+        .bulk-search-controls button {
+            padding: 8px 16px;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #process-csv {
+             background: #17a2b8;
+        }
+        #download-template {
+            background: #6c757d;
+        }
+        #csv-status {
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
         .map-controls {
             margin-top: 10px;
             padding: 10px;
@@ -37,6 +103,30 @@
             padding: 5px 10px;
             font-size: 12px;
         }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            #app {
+                padding: 15px;
+            }
+            .controls {
+                flex-direction: column;
+            }
+            .controls select, .controls button {
+                width: 100%;
+                box-sizing: border-box;
+                flex: 0 1 auto;
+            }
+            .bulk-search-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            #map {
+                height: 400px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -44,22 +134,23 @@
         <h1>Goa Cadastral Data Explorer</h1>
         
         <!-- Bulk Search Section -->
-        <div class="bulk-search-section" style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3 style="margin-top: 0;">Bulk Search</h3>
-            <p style="margin: 5px 0; font-size: 14px; color: #666;">
+        <div class="bulk-search-section">
+            <h3>Bulk Search</h3>
+            <p>
                 Upload a CSV file to search multiple records at once. 
-                CSV should have columns: <strong>village, survey, subdiv</strong> (header row required)
+                CSV should have columns: <strong>taluka, village, survey, subdiv</strong> (header row required)<br>
+                <em>Note: Taluka is required because some villages exist in multiple talukas</em>
             </p>
-            <div style="margin: 10px 0;">
-                <input type="file" id="csv-upload" accept=".csv" style="margin-right: 10px;">
-                <button id="process-csv" disabled style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            <div class="bulk-search-controls">
+                <input type="file" id="csv-upload" accept=".csv">
+                <button id="process-csv" disabled>
                     Process CSV
                 </button>
-                <button id="download-template" style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">
+                <button id="download-template">
                     Download Template
                 </button>
             </div>
-            <div id="csv-status" style="font-size: 12px; margin-top: 5px;"></div>
+            <div id="csv-status"></div>
         </div>
         
         <!-- Individual Search Section -->
