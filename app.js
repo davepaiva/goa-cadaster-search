@@ -549,6 +549,11 @@ class CadastralDataApp {
                     <tbody>
         `;
 
+        // Initialize geometry data storage if not exists
+        if (!window.geometryData) {
+            window.geometryData = {};
+        }
+
         // Collect valid GeoJSON features for the map
         const mapFeatures = [];
         let hasGeometry = false;
@@ -563,6 +568,8 @@ class CadastralDataApp {
                 
                 // Ensure we have a string to work with
                 let geometryString = '';
+                let geojsonGeometry = null;
+                
                 try {
                     if (typeof row.geometry_geojson === 'string') {
                         geometryString = row.geometry_geojson;
@@ -571,85 +578,68 @@ class CadastralDataApp {
                     } else {
                         geometryString = String(row.geometry_geojson);
                     }
+                    
+                    // Try to parse and add to map if it's valid GeoJSON
+                    if (geometryString && !geometryString.includes('WKB Binary')) {
+                        try {
+                            geojsonGeometry = JSON.parse(geometryString);
+                            if (geojsonGeometry && geojsonGeometry.type) {
+                                // Convert any BigInt values to regular numbers
+                                const safeProperties = {
+                                    taluka: String(row.taluka || ''),
+                                    village: String(row.village || ''),
+                                    survey: String(row.survey || ''),
+                                    subdiv: String(row.subdiv || ''),
+                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
+                                };
+                                
+                                mapFeatures.push({
+                                    type: 'Feature',
+                                    geometry: geojsonGeometry,
+                                    properties: safeProperties
+                                });
+                                hasGeometry = true;
+                                hasValidGeometry = true;
+                                geometryForZoom = geojsonGeometry;
+                                
+                                // Store geometry data for button/download access
+                                const filenameParts = [
+                                    safeProperties.village || 'village',
+                                    safeProperties.survey || 'survey',
+                                    safeProperties.subdiv || 'subdiv'
+                                ];
+                                const filename = filenameParts.join('_').replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                
+                                window.geometryData[geometryId] = {
+                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
+                                    geometry: geojsonGeometry,
+                                    filename
+                                };
+                            }
+                        } catch (parseError) {
+                            console.warn('Could not parse geometry as GeoJSON:', parseError);
+                        }
+                    }
                 } catch (e) {
                     console.error('Error converting geometry to string:', e);
-                    geometryString = 'Error displaying geometry';
                 }
                 
-                // Try to parse and add to map if it's valid GeoJSON
-                if (geometryString && !geometryString.includes('WKB Binary')) {
-                    try {
-                        const geojsonGeometry = JSON.parse(geometryString);
-                        if (geojsonGeometry && geojsonGeometry.type) {
-                            // Convert any BigInt values to regular numbers
-                            const safeProperties = {
-                                taluka: String(row.taluka || ''),
-                                village: String(row.village || ''),
-                                survey: String(row.survey || ''),
-                                subdiv: String(row.subdiv || ''),
-                                records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
-                            };
-                            
-                            mapFeatures.push({
-                                type: 'Feature',
-                                geometry: geojsonGeometry,
-                                properties: safeProperties
-                            });
-                            hasGeometry = true;
-                            hasValidGeometry = true;
-                            geometryForZoom = geojsonGeometry;
-                        }
-                    } catch (parseError) {
-                        console.warn('Could not parse geometry as GeoJSON:', parseError);
-                    }
-                }
-                
-                // Try to format the GeoJSON nicely
-                let formattedGeojson = geometryString;
-                try {
-                    const parsed = JSON.parse(geometryString);
-                    formattedGeojson = JSON.stringify(parsed, null, 2);
-                } catch (e) {
-                    // If parsing fails, use original string
-                    formattedGeojson = geometryString;
-                }
-                
-                const shortGeometry = geometryString.length > 100 ? 
-                    geometryString.substring(0, 100) + '...' : 
-                    geometryString;
-                
-                // Escape the geometry string properly for HTML attributes
-                const escapedGeometry = formattedGeojson
-                    .replace(/\\/g, '\\\\')
-                    .replace(/`/g, '\\`')
-                    .replace(/\n/g, '\\n')
-                    .replace(/\r/g, '\\r')
-                    .replace(/'/g, "\\'");
-                
-                geometryDisplay = `
-                    <div>
-                        <div id="${geometryId}-short" style="font-family: monospace; font-size: 11px; background: #f8f9fa; padding: 4px; border-radius: 3px;">${shortGeometry}</div>
-                        <button onclick="toggleGeometry('${geometryId}')" 
-                                style="padding: 2px 6px; font-size: 11px; margin-top: 4px; background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                            Show Full GeoJSON
-                        </button>
-                        <div id="${geometryId}-full" style="display: none;">
-                            <textarea readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 10px; margin-top: 4px; border: 1px solid #ccc; border-radius: 3px; padding: 5px;">
-${formattedGeojson}
-                            </textarea>
-                            <div style="margin-top: 4px;">
-                                <button onclick="copyGeojson('${geometryId}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; margin-right: 5px;">
-                                    Copy GeoJSON
-                                </button>
-                                <button onclick="downloadGeojson('${geometryId}', '${row.village}_${row.survey}_${row.subdiv}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                                    Download
-                                </button>
-                            </div>
+                if (hasValidGeometry) {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px;">
+                            <button onclick="copyKML('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Download KML
+                            </button>
+                            <button onclick="copyGeoJSON('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Copy GeoJSON
+                            </button>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    geometryDisplay = '<em>No geometry data</em>';
+                }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
             }
@@ -674,78 +664,6 @@ ${formattedGeojson}
         });
 
         html += '</tbody></table></div>';
-        
-        // Add the JavaScript function for toggling geometry display
-        html += `
-            <script>
-                function toggleGeometry(geometryId) {
-                    const shortDiv = document.getElementById(geometryId + '-short');
-                    const fullDiv = document.getElementById(geometryId + '-full');
-                    const button = event.target;
-                    
-                    if (fullDiv.style.display === 'none') {
-                        shortDiv.style.display = 'none';
-                        fullDiv.style.display = 'block';
-                        button.textContent = 'Show Short';
-                    } else {
-                        shortDiv.style.display = 'block';
-                        fullDiv.style.display = 'none';
-                        button.textContent = 'Show Full GeoJSON';
-                    }
-                }
-                
-                function copyGeojson(geometryId) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    // Find the copy button for this geometry
-                    const copyButton = document.querySelector('#' + geometryId + '-full button[onclick*="copyGeojson"]');
-                    
-                    // Use the modern clipboard API
-                    if (navigator.clipboard && window.isSecureContext) {
-                        navigator.clipboard.writeText(geojsonContent).then(() => {
-                            // Temporarily change button text to show success
-                            if (copyButton) {
-                                const originalText = copyButton.textContent;
-                                const originalColor = copyButton.style.backgroundColor;
-                                copyButton.textContent = 'Copied!';
-                                copyButton.style.backgroundColor = '#198754';
-                                setTimeout(() => {
-                                    copyButton.textContent = originalText;
-                                    copyButton.style.backgroundColor = originalColor || '#28a745';
-                                }, 1500);
-                            }
-                        }).catch(err => {
-                            console.error('Failed to copy: ', err);
-                            alert('Failed to copy to clipboard');
-                        });
-                    } else {
-                        // Fallback for older browsers
-                        textarea.select();
-                        document.execCommand('copy');
-                        alert('GeoJSON copied to clipboard!');
-                    }
-                }
-                
-                function downloadGeojson(geometryId, filename) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    // Create a blob with the GeoJSON content
-                    const blob = new Blob([geojsonContent], { type: 'application/geo+json' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    // Create a temporary download link
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename + '.geojson';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }
-            </script>
-        `;
         
         $('#results').html(html);
 
@@ -1285,11 +1203,16 @@ Mormugao,Vasco,789,C`;
                             <th>Survey</th>
                             <th>Subdiv</th>
                             <th>Records</th>
-                            <th>Geometry</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
         `;
+
+        // Initialize geometry data storage if not exists
+        if (!window.geometryData) {
+            window.geometryData = {};
+        }
 
         data.forEach((row, index) => {
             let geometryDisplay = '';
@@ -1297,9 +1220,11 @@ Mormugao,Vasco,789,C`;
             let geometryForZoom = null;
             
             if (row.geometry_geojson) {
-                const geometryId = `geometry-${index}`;
+                const geometryId = `bulk-geometry-${index}`;
                 
                 let geometryString = '';
+                let geojsonGeometry = null;
+                
                 try {
                     if (typeof row.geometry_geojson === 'string') {
                         geometryString = row.geometry_geojson;
@@ -1308,59 +1233,51 @@ Mormugao,Vasco,789,C`;
                     } else {
                         geometryString = String(row.geometry_geojson);
                     }
-                } catch (e) {
-                    geometryString = 'Error displaying geometry';
-                }
-                
-                // Check if this is valid GeoJSON for zoom functionality
-                if (geometryString && !geometryString.includes('WKB Binary')) {
-                    try {
-                        const geojsonGeometry = JSON.parse(geometryString);
-                        if (geojsonGeometry && geojsonGeometry.type) {
-                            hasValidGeometry = true;
-                            geometryForZoom = geojsonGeometry;
+                    
+                    // Check if this is valid GeoJSON for zoom functionality
+                    if (geometryString && !geometryString.includes('WKB Binary')) {
+                        try {
+                            geojsonGeometry = JSON.parse(geometryString);
+                            if (geojsonGeometry && geojsonGeometry.type) {
+                                hasValidGeometry = true;
+                                geometryForZoom = geojsonGeometry;
+                                
+                                // Store geometry data for button/download access
+                                const safeVillage = String(row.village || 'village');
+                                const safeSurvey = String(row.survey || 'survey');
+                                const safeSubdiv = String(row.subdiv || 'subdiv');
+                                const filename = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                
+                                window.geometryData[geometryId] = {
+                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
+                                    geometry: geojsonGeometry,
+                                    filename
+                                };
+                            }
+                        } catch (parseError) {
+                            console.warn('Could not parse geometry as GeoJSON:', parseError);
                         }
-                    } catch (parseError) {
-                        console.warn('Could not parse geometry as GeoJSON:', parseError);
                     }
-                }
-                
-                let formattedGeojson = geometryString;
-                try {
-                    const parsed = JSON.parse(geometryString);
-                    formattedGeojson = JSON.stringify(parsed, null, 2);
                 } catch (e) {
-                    formattedGeojson = geometryString;
+                    console.error('Error processing geometry:', e);
                 }
                 
-                const shortGeometry = geometryString.length > 100 ? 
-                    geometryString.substring(0, 100) + '...' : 
-                    geometryString;
-                
-                geometryDisplay = `
-                    <div>
-                        <div id="${geometryId}-short" style="font-family: monospace; font-size: 11px; background: #f8f9fa; padding: 4px; border-radius: 3px;">${shortGeometry}</div>
-                        <button onclick="toggleGeometry('${geometryId}')" 
-                                style="padding: 2px 6px; font-size: 11px; margin-top: 4px; background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                            Show Full GeoJSON
-                        </button>
-                        <div id="${geometryId}-full" style="display: none;">
-                            <textarea readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 10px; margin-top: 4px; border: 1px solid #ccc; border-radius: 3px; padding: 5px;">
-${formattedGeojson}
-                            </textarea>
-                            <div style="margin-top: 4px;">
-                                <button onclick="copyGeojson('${geometryId}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; margin-right: 5px;">
-                                    Copy GeoJSON
-                                </button>
-                                <button onclick="downloadGeojson('${geometryId}', '${row.village}_${row.survey}_${row.subdiv}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                                    Download
-                                </button>
-                            </div>
+                if (hasValidGeometry) {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px;">
+                            <button onclick="copyKML('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Download KML
+                            </button>
+                            <button onclick="copyGeoJSON('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Copy GeoJSON
+                            </button>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    geometryDisplay = '<em>No geometry data</em>';
+                }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
             }
@@ -1379,78 +1296,12 @@ ${formattedGeojson}
                     <td>${row.survey}</td>
                     <td>${row.subdiv}</td>
                     <td>${row.record_count}</td>
-                    <td style="max-width: 350px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
+                    <td onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
         });
 
         html += '</tbody></table></div>';
-        
-        // Add the JavaScript functions (same as before)
-        html += `
-            <script>
-                function toggleGeometry(geometryId) {
-                    const shortDiv = document.getElementById(geometryId + '-short');
-                    const fullDiv = document.getElementById(geometryId + '-full');
-                    const button = event.target;
-                    
-                    if (fullDiv.style.display === 'none') {
-                        shortDiv.style.display = 'none';
-                        fullDiv.style.display = 'block';
-                        button.textContent = 'Show Short';
-                    } else {
-                        shortDiv.style.display = 'block';
-                        fullDiv.style.display = 'none';
-                        button.textContent = 'Show Full GeoJSON';
-                    }
-                }
-                
-                function copyGeojson(geometryId) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    const copyButton = document.querySelector('#' + geometryId + '-full button[onclick*="copyGeojson"]');
-                    
-                    if (navigator.clipboard && window.isSecureContext) {
-                        navigator.clipboard.writeText(geojsonContent).then(() => {
-                            if (copyButton) {
-                                const originalText = copyButton.textContent;
-                                const originalColor = copyButton.style.backgroundColor;
-                                copyButton.textContent = 'Copied!';
-                                copyButton.style.backgroundColor = '#198754';
-                                setTimeout(() => {
-                                    copyButton.textContent = originalText;
-                                    copyButton.style.backgroundColor = originalColor || '#28a745';
-                                }, 1500);
-                            }
-                        }).catch(err => {
-                            console.error('Failed to copy: ', err);
-                            alert('Failed to copy to clipboard');
-                        });
-                    } else {
-                        textarea.select();
-                        document.execCommand('copy');
-                        alert('GeoJSON copied to clipboard!');
-                    }
-                }
-                
-                function downloadGeojson(geometryId, filename) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    const blob = new Blob([geojsonContent], { type: 'application/geo+json' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename + '.geojson';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }
-            </script>
-        `;
         
         $('#results').html(html);
     }
@@ -1494,6 +1345,82 @@ ${formattedGeojson}
         }
     }
 }
+
+// Global functions for downloading KML and copying GeoJSON
+window.copyKML = function(geometryId) {
+    const geometryData = window.geometryData && window.geometryData[geometryId];
+    if (!geometryData || !geometryData.geometry) {
+        alert('No geometry data available');
+        return;
+    }
+    
+    // Create a Feature for tokml (it expects a Feature or FeatureCollection)
+    const feature = {
+        type: 'Feature',
+        geometry: geometryData.geometry,
+        properties: {}
+    };
+    
+    // Use tokml library if available
+    let kml;
+    if (typeof tokml !== 'undefined') {
+        kml = tokml(feature);
+    } else {
+        alert('KML converter library not loaded');
+        return;
+    }
+    
+    // Determine filename for download
+    const baseName = geometryData.filename || 'parcel';
+    const fileName = `${baseName}.kml`;
+    
+    // Create a blob and trigger download
+    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
+
+window.copyGeoJSON = function(geometryId) {
+    const geometryData = window.geometryData && window.geometryData[geometryId];
+    if (!geometryData || !geometryData.geojson) {
+        alert('No geometry data available');
+        return;
+    }
+    
+    const geojson = geometryData.geojson;
+    const button = event.target;
+    
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(geojson).then(() => {
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            button.style.backgroundColor = '#198754';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.backgroundColor = '#28a745';
+            }, 1500);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+            alert('Failed to copy to clipboard');
+        });
+    } else {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = geojson;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('GeoJSON copied to clipboard!');
+    }
+};
 
 // Initialize the app when DOM is ready and Google Maps is loaded
 function initializeApp() {
