@@ -4,9 +4,30 @@
     <title>Cadastral Data Viewer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <!-- MapLibre GL JS -->
-    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <!-- Load API key from config.js (gitignored) -->
+    <script src="config.js"></script>
+    <!-- Google Maps JavaScript API - loaded dynamically with API key -->
+    <script>
+        (function() {
+            const apiKey = window.GOOGLE_MAPS_API_KEY || 'YOUR_API_KEY_HERE';
+            if (apiKey === 'YOUR_API_KEY_HERE') {
+                console.warn('⚠️ Please set your Google Maps API key in config.js (see config.example.js for template)');
+            }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=geometry&callback=initGoogleMaps`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+            
+            // Set a global callback that will be called when Google Maps loads
+            window.initGoogleMaps = function() {
+                console.log('Google Maps API loaded');
+                window.googleMapsLoaded = true;
+                // Dispatch custom event to notify that Google Maps is ready
+                window.dispatchEvent(new Event('googlemapsloaded'));
+            };
+        })();
+    </script>
     <style>
         body {
             font-family: Arial, sans-serif;

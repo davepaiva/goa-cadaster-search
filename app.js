@@ -7,8 +7,10 @@ class CadastralDataApp {
         this.currentData = null; // Store current query results
         this.currentFilters = {}; // Store current filters
         this.viewMode = 'summary'; // 'summary' or 'detailed'
-        this.map = null; // MapLibre map instance
+        this.map = null; // Google Maps instance
         this.mapFeatures = []; // Store current map features
+        this.mapPolygons = []; // Store Google Maps polygon objects
+        this.mapInfoWindows = []; // Store info windows
         this.init();
     }
 
@@ -68,117 +70,22 @@ class CadastralDataApp {
 
     initializeMap() {
         try {
-            // Initialize MapLibre GL map centered on Goa
-            this.map = new maplibregl.Map({
-                container: 'map',
-                style: {
-                    version: 8,
-                    sources: {
-                        'osm': {
-                            type: 'raster',
-                            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-                            tileSize: 256,
-                            attribution: '© OpenStreetMap contributors'
-                        }
-                    },
-                    layers: [
-                        {
-                            id: 'osm',
-                            type: 'raster',
-                            source: 'osm',
-                            minzoom: 0,
-                            maxzoom: 19
-                        }
-                    ]
+            // Initialize Google Maps centered on Goa with satellite view
+            this.map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 15.2993, lng: 74.124 }, // Goa coordinates
+                zoom: 10,
+                mapTypeId: 'satellite', // Set to satellite view
+                mapTypeControl: true,
+                mapTypeControlOptions: {
+                    style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+                    position: google.maps.ControlPosition.TOP_RIGHT
                 },
-                center: [74.124, 15.2993], // Goa coordinates
-                zoom: 10
+                zoomControl: true,
+                streetViewControl: false,
+                fullscreenControl: true
             });
 
-            // Add navigation controls
-            this.map.addControl(new maplibregl.NavigationControl(), 'top-right');
-
-            // Wait for map to load before adding sources
-            this.map.on('load', () => {
-                console.log('Map loaded successfully');
-                
-                // Add source for cadastral data
-                this.map.addSource('cadastral-data', {
-                    type: 'geojson',
-                    data: {
-                        type: 'FeatureCollection',
-                        features: []
-                    }
-                });
-
-                // Add fill layer for polygons
-                this.map.addLayer({
-                    id: 'cadastral-fill',
-                    type: 'fill',
-                    source: 'cadastral-data',
-                    paint: {
-                        'fill-color': '#007cba',
-                        'fill-opacity': 0.3
-                    }
-                });
-
-                // Add outline layer for borders
-                this.map.addLayer({
-                    id: 'cadastral-outline',
-                    type: 'line',
-                    source: 'cadastral-data',
-                    paint: {
-                        'line-color': '#007cba',
-                        'line-width': 2
-                    }
-                });
-
-                // Add labels layer
-                this.map.addLayer({
-                    id: 'cadastral-labels',
-                    type: 'symbol',
-                    source: 'cadastral-data',
-                    layout: {
-                        'text-field': ['concat', 'Survey: ', ['get', 'survey'], '\nSubdiv: ', ['get', 'subdiv']],
-                        'text-font': ['Open Sans Regular'],
-                        'text-size': 10,
-                        'text-anchor': 'center'
-                    },
-                    paint: {
-                        'text-color': '#000',
-                        'text-halo-color': '#fff',
-                        'text-halo-width': 1
-                    }
-                });
-
-                // Add click handler for features
-                this.map.on('click', 'cadastral-fill', (e) => {
-                    const feature = e.features[0];
-                    if (feature) {
-                        new maplibregl.Popup()
-                            .setLngLat(e.lngLat)
-                            .setHTML(`
-                                <div style="font-size: 12px;">
-                                    <strong>Cadastral Information</strong><br>
-                                    <strong>Taluka:</strong> ${feature.properties.taluka}<br>
-                                    <strong>Village:</strong> ${feature.properties.village}<br>
-                                    <strong>Survey:</strong> ${feature.properties.survey}<br>
-                                    <strong>Subdiv:</strong> ${feature.properties.subdiv}
-                                </div>
-                            `)
-                            .addTo(this.map);
-                    }
-                });
-
-                // Change cursor on hover
-                this.map.on('mouseenter', 'cadastral-fill', () => {
-                    this.map.getCanvas().style.cursor = 'pointer';
-                });
-
-                this.map.on('mouseleave', 'cadastral-fill', () => {
-                    this.map.getCanvas().style.cursor = '';
-                });
-            });
+            console.log('Google Maps initialized successfully');
 
         } catch (error) {
             console.error('Failed to initialize map:', error);
@@ -847,62 +754,143 @@ ${formattedGeojson}
     }
 
     updateMap(features, hasGeometry) {
-        if (!this.map || !this.map.isStyleLoaded()) {
+        if (!this.map) {
             console.warn('Map not ready yet');
             return;
         }
 
         try {
-            // Update map source with new features
-            const source = this.map.getSource('cadastral-data');
-            if (source) {
-                source.setData({
-                    type: 'FeatureCollection',
-                    features: features
+            // Clear existing polygons
+            this.clearMapPolygons();
+
+            // Store features for other operations
+            this.mapFeatures = features;
+
+            // Show/hide map based on whether we have geometry data
+            if (hasGeometry && features.length > 0) {
+                $('#map-container').show();
+                
+                // Update map info
+                $('#map-info').text(`Showing ${features.length} cadastral parcels`);
+                
+                // Add polygons to map
+                features.forEach((feature, index) => {
+                    this.addPolygonToMap(feature, index);
                 });
-
-                // Store features for other operations
-                this.mapFeatures = features;
-
-                // Show/hide map based on whether we have geometry data
-                if (hasGeometry && features.length > 0) {
-                    $('#map-container').show();
-                    
-                    // Update map info
-                    $('#map-info').text(`Showing ${features.length} cadastral parcels`);
-                    
-                    // Fit map to show all features
-                    setTimeout(() => {
-                        this.fitMapToBounds();
-                    }, 100);
-                } else {
-                    $('#map-container').hide();
-                }
+                
+                // Fit map to show all features
+                setTimeout(() => {
+                    this.fitMapToBounds();
+                }, 100);
+            } else {
+                $('#map-container').hide();
             }
         } catch (error) {
             console.error('Error updating map:', error);
         }
     }
 
-    fitMapToBounds() {
-        if (!this.mapFeatures || this.mapFeatures.length === 0) return;
+    clearMapPolygons() {
+        // Remove all existing polygons from the map
+        this.mapPolygons.forEach(polygon => {
+            polygon.setMap(null);
+        });
+        this.mapPolygons = [];
+
+        // Close all info windows
+        this.mapInfoWindows.forEach(infoWindow => {
+            infoWindow.close();
+        });
+        this.mapInfoWindows = [];
+    }
+
+    addPolygonToMap(feature, index) {
+        if (!feature.geometry || !this.map) return;
 
         try {
-            const bounds = new maplibregl.LngLatBounds();
+            const geometry = feature.geometry;
+            let paths = [];
+
+            if (geometry.type === 'Polygon') {
+                // Convert GeoJSON coordinates to Google Maps LatLng format
+                paths = geometry.coordinates[0].map(coord => ({
+                    lat: coord[1],
+                    lng: coord[0]
+                }));
+            } else if (geometry.type === 'MultiPolygon') {
+                // For MultiPolygon, use the first polygon
+                paths = geometry.coordinates[0][0].map(coord => ({
+                    lat: coord[1],
+                    lng: coord[0]
+                }));
+            } else {
+                console.warn('Unsupported geometry type:', geometry.type);
+                return;
+            }
+
+            // Create polygon with styling
+            const polygon = new google.maps.Polygon({
+                paths: paths,
+                strokeColor: '#007cba',
+                strokeOpacity: 1.0,
+                strokeWeight: 2,
+                fillColor: '#007cba',
+                fillOpacity: 0.3,
+                map: this.map
+            });
+
+            // Create info window content
+            const infoContent = `
+                <div style="font-size: 12px;">
+                    <strong>Cadastral Information</strong><br>
+                    <strong>Taluka:</strong> ${feature.properties.taluka || 'N/A'}<br>
+                    <strong>Village:</strong> ${feature.properties.village || 'N/A'}<br>
+                    <strong>Survey:</strong> ${feature.properties.survey || 'N/A'}<br>
+                    <strong>Subdiv:</strong> ${feature.properties.subdiv || 'N/A'}
+                </div>
+            `;
+
+            const infoWindow = new google.maps.InfoWindow({
+                content: infoContent
+            });
+
+            // Add click listener to polygon
+            polygon.addListener('click', (event) => {
+                // Close all other info windows
+                this.mapInfoWindows.forEach(iw => iw.close());
+                
+                infoWindow.setPosition(event.latLng);
+                infoWindow.open(this.map);
+            });
+
+            // Store polygon and info window
+            this.mapPolygons.push(polygon);
+            this.mapInfoWindows.push(infoWindow);
+
+        } catch (error) {
+            console.error('Error adding polygon to map:', error);
+        }
+    }
+
+    fitMapToBounds() {
+        if (!this.mapFeatures || this.mapFeatures.length === 0 || !this.map) return;
+
+        try {
+            const bounds = new google.maps.LatLngBounds();
             
             this.mapFeatures.forEach(feature => {
                 if (feature.geometry.type === 'Polygon') {
                     feature.geometry.coordinates[0].forEach(coord => {
-                        bounds.extend(coord);
+                        bounds.extend({ lat: coord[1], lng: coord[0] });
                     });
                 } else if (feature.geometry.type === 'MultiPolygon') {
                     feature.geometry.coordinates.forEach(polygon => {
                         polygon[0].forEach(coord => {
-                            bounds.extend(coord);
+                            bounds.extend({ lat: coord[1], lng: coord[0] });
                         });
                     });
                 } else if (feature.geometry.type === 'Point') {
-                    bounds.extend(feature.geometry.coordinates);
+                    bounds.extend({ lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0] });
                 }
             });
 
@@ -1008,28 +996,17 @@ ${formattedGeojson}
         });
 
         $('#toggle-labels').on('click', () => {
-            if (this.map && this.map.isStyleLoaded()) {
-                const visibility = this.map.getLayoutProperty('cadastral-labels', 'visibility');
-                const newVisibility = visibility === 'visible' ? 'none' : 'visible';
-                this.map.setLayoutProperty('cadastral-labels', 'visibility', newVisibility);
-                
-                const button = $('#toggle-labels');
-                button.text(newVisibility === 'visible' ? 'Hide Labels' : 'Show Labels');
-            }
+            // Labels functionality not applicable for Google Maps polygons
+            // Could be implemented with markers if needed
+            console.log('Label toggle not implemented for Google Maps');
         });
 
         $('#clear-map').on('click', () => {
-            if (this.map && this.map.isStyleLoaded()) {
-                const source = this.map.getSource('cadastral-data');
-                if (source) {
-                    source.setData({
-                        type: 'FeatureCollection',
-                        features: []
-                    });
-                    this.mapFeatures = [];
-                    $('#map-info').text('Map cleared');
-                    $('#map-container').hide();
-                }
+            if (this.map) {
+                this.clearMapPolygons();
+                this.mapFeatures = [];
+                $('#map-info').text('Map cleared');
+                $('#map-container').hide();
             }
         });
     }
@@ -1480,37 +1457,34 @@ ${formattedGeojson}
 
     // Add method to zoom to specific geometry
     zoomToGeometry(geometry) {
-        if (!this.map || !this.map.isStyleLoaded() || !geometry) {
+        if (!this.map || !geometry) {
             console.warn('Map not ready or no geometry provided');
             return;
         }
 
         try {
-            const bounds = new maplibregl.LngLatBounds();
+            const bounds = new google.maps.LatLngBounds();
             
             if (geometry.type === 'Polygon') {
                 geometry.coordinates[0].forEach(coord => {
-                    bounds.extend(coord);
+                    bounds.extend({ lat: coord[1], lng: coord[0] });
                 });
             } else if (geometry.type === 'MultiPolygon') {
                 geometry.coordinates.forEach(polygon => {
                     polygon[0].forEach(coord => {
-                        bounds.extend(coord);
+                        bounds.extend({ lat: coord[1], lng: coord[0] });
                     });
                 });
             } else if (geometry.type === 'Point') {
-                bounds.extend(geometry.coordinates);
+                bounds.extend({ lat: geometry.coordinates[1], lng: geometry.coordinates[0] });
                 // For points, add some padding since a single point doesn't create bounds
                 const padding = 0.001; // roughly 100m
-                bounds.extend([geometry.coordinates[0] - padding, geometry.coordinates[1] - padding]);
-                bounds.extend([geometry.coordinates[0] + padding, geometry.coordinates[1] + padding]);
+                bounds.extend({ lat: geometry.coordinates[1] - padding, lng: geometry.coordinates[0] - padding });
+                bounds.extend({ lat: geometry.coordinates[1] + padding, lng: geometry.coordinates[0] + padding });
             }
 
             // Zoom to the bounds with some padding
-            this.map.fitBounds(bounds, { 
-                padding: 100,
-                maxZoom: 18 // Prevent zooming too close
-            });
+            this.map.fitBounds(bounds, { padding: 100 });
 
             // Show map container if it's hidden
             $('#map-container').show();
@@ -1521,7 +1495,23 @@ ${formattedGeojson}
     }
 }
 
-// Initialize the app when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    window.cadastralApp = new CadastralDataApp();
-});
+// Initialize the app when DOM is ready and Google Maps is loaded
+function initializeApp() {
+    if (window.google && window.google.maps) {
+        // Google Maps is already loaded
+        window.cadastralApp = new CadastralDataApp();
+    } else {
+        // Wait for Google Maps to load
+        window.addEventListener('googlemapsloaded', () => {
+            window.cadastralApp = new CadastralDataApp();
+        }, { once: true });
+    }
+}
+
+// Wait for DOM to be ready before initializing
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+    // DOM is already ready
+    initializeApp();
+}
