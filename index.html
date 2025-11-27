@@ -6,6 +6,8 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- GeoJSON to KML converter (served locally as tokml.js; see README) -->
     <script src="tokml.js"></script>
+    <!-- JSZip for creating ZIP archives of KML + GeoJSON downloads -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- Load API key from config.js (gitignored) -->
     <script src="config.js"></script>
     <!-- Google Maps JavaScript API - loaded dynamically with API key -->
@@ -282,6 +284,13 @@
         <!-- Results -->
         <div id="loading" style="display:none;">Loading...</div>
         <div id="results"></div>
+        <div id="download-all-container" style="margin: 10px 0; display: none;">
+            <button id="download-all"
+                    onclick="window.downloadAllGeometries()"
+                    style="padding: 8px 14px; font-size: 13px; background: #343a40; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                Download All (KML + GeoJSON)
+            </button>
+        </div>
         
         <!-- Map -->
         <div id="map-container" style="display:none;">

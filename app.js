@@ -543,7 +543,7 @@ class CadastralDataApp {
                             <th>Survey</th>
                             <th>Subdiv</th>
                             <th>Records</th>
-                            <th>Geometry</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -553,6 +553,8 @@ class CadastralDataApp {
         if (!window.geometryData) {
             window.geometryData = {};
         }
+        // Track geometry IDs for current table (for bulk download)
+        window.currentGeometryIds = [];
 
         // Collect valid GeoJSON features for the map
         const mapFeatures = [];
@@ -608,13 +610,17 @@ class CadastralDataApp {
                                     safeProperties.survey || 'survey',
                                     safeProperties.subdiv || 'subdiv'
                                 ];
-                                const filename = filenameParts.join('_').replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                const baseName = filenameParts.join('_').replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                // Ensure uniqueness even when survey + subdiv repeat
+                                const filename = `${baseName}_(${index + 1})`;
                                 
                                 window.geometryData[geometryId] = {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
                                     geometry: geojsonGeometry,
                                     filename
                                 };
+                                // Track this geometry for master download
+                                window.currentGeometryIds.push(geometryId);
                             }
                         } catch (parseError) {
                             console.warn('Could not parse geometry as GeoJSON:', parseError);
@@ -666,6 +672,13 @@ class CadastralDataApp {
         html += '</tbody></table></div>';
         
         $('#results').html(html);
+
+        // Show/hide master download button based on geometry availability
+        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
+            $('#download-all-container').show();
+        } else {
+            $('#download-all-container').hide();
+        }
 
         // Update map with new data
         this.updateMap(mapFeatures, hasGeometry);
@@ -1246,7 +1259,9 @@ Mormugao,Vasco,789,C`;
                                 const safeVillage = String(row.village || 'village');
                                 const safeSurvey = String(row.survey || 'survey');
                                 const safeSubdiv = String(row.subdiv || 'subdiv');
-                                const filename = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                const baseName = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                // Ensure uniqueness even when survey + subdiv repeat
+                                const filename = `${baseName}_(${index + 1})`;
                                 
                                 window.geometryData[geometryId] = {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
@@ -1385,6 +1400,71 @@ window.copyKML = function(geometryId) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+};
+
+// Master download: ZIP containing KML + GeoJSON for all visible plots
+window.downloadAllGeometries = function() {
+    if (!window.currentGeometryIds || window.currentGeometryIds.length === 0) {
+        alert('No plots with geometry available to download');
+        return;
+    }
+
+    if (typeof JSZip === 'undefined') {
+        alert('ZIP library (JSZip) not loaded');
+        return;
+    }
+
+    if (typeof tokml === 'undefined') {
+        alert('KML converter library (tokml) not loaded');
+        return;
+    }
+
+    const zip = new JSZip();
+    let filesAdded = 0;
+
+    window.currentGeometryIds.forEach((geometryId, index) => {
+        const geometryData = window.geometryData && window.geometryData[geometryId];
+        if (!geometryData || !geometryData.geometry || !geometryData.geojson) {
+            return;
+        }
+
+        const baseName = geometryData.filename || `plot_${index + 1}`;
+        const folder = zip.folder(baseName);
+
+        // Prepare GeoJSON content
+        const geojsonContent = geometryData.geojson;
+        folder.file(`${baseName}.geojson`, geojsonContent);
+
+        // Prepare KML content via tokml
+        const feature = {
+            type: 'Feature',
+            geometry: geometryData.geometry,
+            properties: {}
+        };
+        const kmlContent = tokml(feature);
+        folder.file(`${baseName}.kml`, kmlContent);
+
+        filesAdded += 2;
+    });
+
+    if (filesAdded === 0) {
+        alert('No geometry data available to include in ZIP');
+        return;
+    }
+
+    zip.generateAsync({ type: 'blob' }).then((content) => {
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'plots_kml_geojson.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }).catch((err) => {
+        console.error('Error generating ZIP:', err);
+        alert('Failed to generate ZIP file');
+    });
 };
 
 window.copyGeoJSON = function(geometryId) {
