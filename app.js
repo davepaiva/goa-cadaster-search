@@ -564,9 +564,10 @@ class CadastralDataApp {
             let geometryDisplay = '';
             let hasValidGeometry = false;
             let geometryForZoom = null;
+            let geometryId = null;
             
             if (row.geometry_geojson) {
-                const geometryId = `geometry-${index}`;
+                geometryId = `geometry-${index}`;
                 
                 // Ensure we have a string to work with
                 let geometryString = '';
@@ -617,7 +618,8 @@ class CadastralDataApp {
                                 window.geometryData[geometryId] = {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
                                     geometry: geojsonGeometry,
-                                    filename
+                                    filename,
+                                    properties: safeProperties
                                 };
                                 // Track this geometry for master download
                                 window.currentGeometryIds.push(geometryId);
@@ -632,7 +634,7 @@ class CadastralDataApp {
                 
                 if (hasValidGeometry) {
                     geometryDisplay = `
-                        <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; gap: 8px; align-items: center;">
                             <button onclick="copyKML('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Download KML
@@ -641,10 +643,24 @@ class CadastralDataApp {
                                     style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Copy GeoJSON
                             </button>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
                         </div>
                     `;
                 } else {
-                    geometryDisplay = '<em>No geometry data</em>';
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <em>No geometry data</em>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
+                        </div>
+                    `;
                 }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
@@ -654,9 +670,10 @@ class CadastralDataApp {
             const rowClass = hasValidGeometry ? 'clickable-row' : '';
             const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
+            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
             html += `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} 
+                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
                     <td>${row.taluka}</td>
@@ -1161,7 +1178,7 @@ Mormugao,Vasco,789,C`;
             let hasGeometry = false;
 
             // Process geometry data for map
-            data.forEach(row => {
+            data.forEach((row) => {
                 if (row.geometry_geojson && !row.geometry_geojson.includes('WKB Binary')) {
                     try {
                         const geometryString = typeof row.geometry_geojson === 'string' 
@@ -1226,14 +1243,17 @@ Mormugao,Vasco,789,C`;
         if (!window.geometryData) {
             window.geometryData = {};
         }
+        // Track geometry IDs for current table (for bulk download)
+        window.currentGeometryIds = [];
 
         data.forEach((row, index) => {
             let geometryDisplay = '';
             let hasValidGeometry = false;
             let geometryForZoom = null;
+            let geometryId = null;
             
             if (row.geometry_geojson) {
-                const geometryId = `bulk-geometry-${index}`;
+                geometryId = `bulk-geometry-${index}`;
                 
                 let geometryString = '';
                 let geojsonGeometry = null;
@@ -1256,18 +1276,31 @@ Mormugao,Vasco,789,C`;
                                 geometryForZoom = geojsonGeometry;
                                 
                                 // Store geometry data for button/download access
+                                const safeTaluka = String(row.taluka || 'taluka');
                                 const safeVillage = String(row.village || 'village');
                                 const safeSurvey = String(row.survey || 'survey');
                                 const safeSubdiv = String(row.subdiv || 'subdiv');
                                 const baseName = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
                                 // Ensure uniqueness even when survey + subdiv repeat
                                 const filename = `${baseName}_(${index + 1})`;
+
+                                const safeProperties = {
+                                    taluka: safeTaluka,
+                                    village: safeVillage,
+                                    survey: safeSurvey,
+                                    subdiv: safeSubdiv,
+                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
+                                };
                                 
                                 window.geometryData[geometryId] = {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
                                     geometry: geojsonGeometry,
-                                    filename
+                                    filename,
+                                    properties: safeProperties
                                 };
+
+                                // Track this geometry for master download and future map updates
+                                window.currentGeometryIds.push(geometryId);
                             }
                         } catch (parseError) {
                             console.warn('Could not parse geometry as GeoJSON:', parseError);
@@ -1279,7 +1312,7 @@ Mormugao,Vasco,789,C`;
                 
                 if (hasValidGeometry) {
                     geometryDisplay = `
-                        <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; gap: 8px; align-items: center;">
                             <button onclick="copyKML('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Download KML
@@ -1288,10 +1321,24 @@ Mormugao,Vasco,789,C`;
                                     style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Copy GeoJSON
                             </button>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
                         </div>
                     `;
                 } else {
-                    geometryDisplay = '<em>No geometry data</em>';
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <em>No geometry data</em>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
+                        </div>
+                    `;
                 }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
@@ -1301,9 +1348,10 @@ Mormugao,Vasco,789,C`;
             const rowClass = hasValidGeometry ? 'clickable-row' : '';
             const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
+            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
             html += `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler}
+                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
                     <td>${row.taluka}</td>
@@ -1357,6 +1405,53 @@ Mormugao,Vasco,789,C`;
 
         } catch (error) {
             console.error('Error zooming to geometry:', error);
+        }
+    }
+
+    // Remove a single geometry (and its polygon) from the map using its geometry ID
+    removeGeometryById(geometryId) {
+        if (!geometryId) return;
+
+        try {
+            // Remove from currentGeometryIds (used for "Download All")
+            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
+                window.currentGeometryIds = window.currentGeometryIds.filter(id => id !== geometryId);
+                if (window.currentGeometryIds.length === 0) {
+                    $('#download-all-container').hide();
+                }
+            }
+
+            // Remove stored geometry data
+            if (window.geometryData && window.geometryData[geometryId]) {
+                delete window.geometryData[geometryId];
+            }
+            
+            // Rebuild map features from remaining geometry data and refresh map
+            const remainingFeatures = [];
+            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
+                window.currentGeometryIds.forEach(id => {
+                    const g = window.geometryData && window.geometryData[id];
+                    if (g && g.geometry) {
+                        remainingFeatures.push({
+                            type: 'Feature',
+                            geometry: g.geometry,
+                            properties: g.properties || {}
+                        });
+                    }
+                });
+            }
+
+            const hasGeometry = remainingFeatures.length > 0;
+            this.updateMap(remainingFeatures, hasGeometry);
+
+            // Update map info / visibility text if element exists
+            if (!hasGeometry) {
+                $('#map-info').text('Map cleared');
+            } else {
+                $('#map-info').text(`Showing ${remainingFeatures.length} cadastral parcels`);
+            }
+        } catch (error) {
+            console.error('Error removing geometry by ID:', error);
         }
     }
 }
@@ -1499,6 +1594,33 @@ window.copyGeoJSON = function(geometryId) {
         document.execCommand('copy');
         document.body.removeChild(textarea);
         alert('GeoJSON copied to clipboard!');
+    }
+};
+
+// Simple helper to remove a table row when the delete icon is clicked
+window.deleteTableRow = function(buttonElement) {
+    if (!buttonElement) return;
+    let row = buttonElement.closest && buttonElement.closest('tr');
+
+    // Fallback for older browsers without closest support
+    if (!row) {
+        let el = buttonElement;
+        while (el && el.tagName !== 'TR') {
+            el = el.parentElement;
+        }
+        row = el;
+    }
+
+    if (!row) return;
+
+    // If this row is tied to a geometry on the map, remove that as well
+    const geometryId = row.getAttribute && row.getAttribute('data-geometry-id');
+    if (geometryId && window.cadastralApp && typeof window.cadastralApp.removeGeometryById === 'function') {
+        window.cadastralApp.removeGeometryById(geometryId);
+    }
+
+    if (row.parentElement) {
+        row.parentElement.removeChild(row);
     }
 };
 
