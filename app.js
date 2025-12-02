@@ -11,6 +11,7 @@ class CadastralDataApp {
         this.mapFeatures = []; // Store current map features
         this.mapPolygons = []; // Store Google Maps polygon objects
         this.mapInfoWindows = []; // Store info windows
+        this.polygonColorMap = {}; // Map geometry ID to polygon object and color
         this.init();
     }
 
@@ -533,7 +534,10 @@ class CadastralDataApp {
 
         let html = `
             <h3>Cadastral Data${filterText} (${data.length} records)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
+            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                💡 Click on any row to zoom to that parcel on the map<br>
+                🎨 Use the color picker to customize each polygon's color
+            </p>
             <div class="table-container">
                 <table>
                     <thead>
@@ -599,7 +603,10 @@ class CadastralDataApp {
                                 mapFeatures.push({
                                     type: 'Feature',
                                     geometry: geojsonGeometry,
-                                    properties: safeProperties
+                                    properties: {
+                                        ...safeProperties,
+                                        geometryId: geometryId
+                                    }
                                 });
                                 hasGeometry = true;
                                 hasValidGeometry = true;
@@ -634,7 +641,13 @@ class CadastralDataApp {
                 
                 if (hasValidGeometry) {
                     geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center;">
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="color" 
+                                   value="#007cba" 
+                                   title="Change polygon color"
+                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
+                                   onclick="event.stopPropagation();"
+                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
                             <button onclick="copyKML('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Download KML
@@ -681,7 +694,7 @@ class CadastralDataApp {
                     <td>${row.survey}</td>
                     <td>${row.subdiv}</td>
                     <td>${row.record_count}</td>
-                    <td style="max-width: 350px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
+                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
         });
@@ -738,6 +751,23 @@ class CadastralDataApp {
         }
     }
 
+    // Method to change polygon color
+    changePolygonColor(geometryId, newColor) {
+        if (!geometryId || !newColor) return;
+
+        const polygonData = this.polygonColorMap[geometryId];
+        if (polygonData && polygonData.polygon) {
+            // Update the polygon's colors
+            polygonData.polygon.setOptions({
+                strokeColor: newColor,
+                fillColor: newColor
+            });
+            
+            // Save the color for future reloads
+            polygonData.color = newColor;
+        }
+    }
+
     clearMapPolygons() {
         // Remove all existing polygons from the map
         this.mapPolygons.forEach(polygon => {
@@ -750,6 +780,16 @@ class CadastralDataApp {
             infoWindow.close();
         });
         this.mapInfoWindows = [];
+        
+        // Clear the polygon color map (but keep the colors for potential reloads)
+        // Only clear references to polygon objects, not the color preferences
+        Object.keys(this.polygonColorMap).forEach(key => {
+            if (this.polygonColorMap[key]) {
+                // Keep the color, but clear the polygon reference
+                const savedColor = this.polygonColorMap[key].color;
+                this.polygonColorMap[key] = { color: savedColor, polygon: null };
+            }
+        });
     }
 
     addPolygonToMap(feature, index) {
@@ -776,13 +816,19 @@ class CadastralDataApp {
                 return;
             }
 
+            // Get geometry ID from feature properties
+            const geometryId = feature.properties.geometryId || `fallback-geometry-${index}`;
+            
+            // Check if there's a saved color for this geometry
+            const savedColor = this.polygonColorMap[geometryId]?.color || '#007cba';
+
             // Create polygon with styling
             const polygon = new google.maps.Polygon({
                 paths: paths,
-                strokeColor: '#007cba',
+                strokeColor: savedColor,
                 strokeOpacity: 1.0,
                 strokeWeight: 2,
-                fillColor: '#007cba',
+                fillColor: savedColor,
                 fillOpacity: 0.3,
                 map: this.map
             });
@@ -814,6 +860,12 @@ class CadastralDataApp {
             // Store polygon and info window
             this.mapPolygons.push(polygon);
             this.mapInfoWindows.push(infoWindow);
+            
+            // Store polygon in color map for later color updates
+            this.polygonColorMap[geometryId] = {
+                polygon: polygon,
+                color: savedColor
+            };
 
         } catch (error) {
             console.error('Error adding polygon to map:', error);
@@ -1088,8 +1140,8 @@ Mormugao,Vasco,789,C`;
 
             $('#csv-status').html(`<span style="color: #28a745;">✓ Found ${allResults.length} records</span>`);
             
-            // Display results
-            this.displayBulkResults(allResults, searchCriteria.length);
+            // Display results - pass mapFeatures so we can match geometryIds
+            this.displayBulkResults(allResults, searchCriteria.length, allMapFeatures);
             this.updateMap(allMapFeatures, hasGeometry);
 
         } catch (error) {
@@ -1178,7 +1230,7 @@ Mormugao,Vasco,789,C`;
             let hasGeometry = false;
 
             // Process geometry data for map
-            data.forEach((row) => {
+            data.forEach((row, index) => {
                 if (row.geometry_geojson && !row.geometry_geojson.includes('WKB Binary')) {
                     try {
                         const geometryString = typeof row.geometry_geojson === 'string' 
@@ -1195,10 +1247,16 @@ Mormugao,Vasco,789,C`;
                                 records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
                             };
                             
+                            // Generate geometry ID for this feature
+                            const geometryId = `bulk-geometry-${Date.now()}-${index}`;
+                            
                             mapFeatures.push({
                                 type: 'Feature',
                                 geometry: geojsonGeometry,
-                                properties: safeProperties
+                                properties: {
+                                    ...safeProperties,
+                                    geometryId: geometryId
+                                }
                             });
                             hasGeometry = true;
                         }
@@ -1215,7 +1273,7 @@ Mormugao,Vasco,789,C`;
         }
     }
 
-    displayBulkResults(data, searchCount) {
+    displayBulkResults(data, searchCount, mapFeatures = []) {
         if (data.length === 0) {
             $('#results').html('<p>No data found for the search criteria</p>');
             return;
@@ -1223,7 +1281,10 @@ Mormugao,Vasco,789,C`;
 
         let html = `
             <h3>Bulk Search Results (${data.length} records from ${searchCount} searches)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
+            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                💡 Click on any row to zoom to that parcel on the map<br>
+                🎨 Use the color picker to customize each polygon's color
+            </p>
             <div class="table-container">
                 <table>
                     <thead>
@@ -1246,14 +1307,38 @@ Mormugao,Vasco,789,C`;
         // Track geometry IDs for current table (for bulk download)
         window.currentGeometryIds = [];
 
+        // Create a map of data rows to their corresponding mapFeatures for geometryId lookup
+        const dataToFeatureMap = new Map();
+        mapFeatures.forEach(feature => {
+            const key = `${feature.properties.taluka}-${feature.properties.village}-${feature.properties.survey}-${feature.properties.subdiv}`;
+            if (!dataToFeatureMap.has(key)) {
+                dataToFeatureMap.set(key, []);
+            }
+            dataToFeatureMap.get(key).push(feature);
+        });
+
         data.forEach((row, index) => {
             let geometryDisplay = '';
             let hasValidGeometry = false;
             let geometryForZoom = null;
             let geometryId = null;
             
+            // Try to find matching mapFeature to get the correct geometryId
+            const rowKey = `${row.taluka}-${row.village}-${row.survey}-${row.subdiv}`;
+            const matchingFeatures = dataToFeatureMap.get(rowKey) || [];
+            let matchingFeature = null;
+            
+            if (matchingFeatures.length > 0) {
+                // Use the first unassigned feature or fallback to first
+                matchingFeature = matchingFeatures.shift();
+                geometryId = matchingFeature.properties.geometryId;
+            }
+            
             if (row.geometry_geojson) {
-                geometryId = `bulk-geometry-${index}`;
+                // If we didn't find a matching feature, create a fallback geometryId
+                if (!geometryId) {
+                    geometryId = `bulk-geometry-fallback-${index}`;
+                }
                 
                 let geometryString = '';
                 let geojsonGeometry = null;
@@ -1312,7 +1397,13 @@ Mormugao,Vasco,789,C`;
                 
                 if (hasValidGeometry) {
                     geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center;">
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="color" 
+                                   value="#007cba" 
+                                   title="Change polygon color"
+                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
+                                   onclick="event.stopPropagation();"
+                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
                             <button onclick="copyKML('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Download KML
@@ -1359,7 +1450,7 @@ Mormugao,Vasco,789,C`;
                     <td>${row.survey}</td>
                     <td>${row.subdiv}</td>
                     <td>${row.record_count}</td>
-                    <td onclick="event.stopPropagation()">${geometryDisplay}</td>
+                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
         });
