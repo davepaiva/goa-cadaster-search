@@ -7,8 +7,11 @@ class CadastralDataApp {
         this.currentData = null; // Store current query results
         this.currentFilters = {}; // Store current filters
         this.viewMode = 'summary'; // 'summary' or 'detailed'
-        this.map = null; // MapLibre map instance
+        this.map = null; // Google Maps instance
         this.mapFeatures = []; // Store current map features
+        this.mapPolygons = []; // Store Google Maps polygon objects
+        this.mapInfoWindows = []; // Store info windows
+        this.polygonColorMap = {}; // Map geometry ID to polygon object and color
         this.init();
     }
 
@@ -68,117 +71,22 @@ class CadastralDataApp {
 
     initializeMap() {
         try {
-            // Initialize MapLibre GL map centered on Goa
-            this.map = new maplibregl.Map({
-                container: 'map',
-                style: {
-                    version: 8,
-                    sources: {
-                        'osm': {
-                            type: 'raster',
-                            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-                            tileSize: 256,
-                            attribution: '© OpenStreetMap contributors'
-                        }
-                    },
-                    layers: [
-                        {
-                            id: 'osm',
-                            type: 'raster',
-                            source: 'osm',
-                            minzoom: 0,
-                            maxzoom: 19
-                        }
-                    ]
+            // Initialize Google Maps centered on Goa with satellite view
+            this.map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 15.2993, lng: 74.124 }, // Goa coordinates
+                zoom: 10,
+                mapTypeId: 'satellite', // Set to satellite view
+                mapTypeControl: true,
+                mapTypeControlOptions: {
+                    style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+                    position: google.maps.ControlPosition.TOP_RIGHT
                 },
-                center: [74.124, 15.2993], // Goa coordinates
-                zoom: 10
+                zoomControl: true,
+                streetViewControl: false,
+                fullscreenControl: true
             });
 
-            // Add navigation controls
-            this.map.addControl(new maplibregl.NavigationControl(), 'top-right');
-
-            // Wait for map to load before adding sources
-            this.map.on('load', () => {
-                console.log('Map loaded successfully');
-                
-                // Add source for cadastral data
-                this.map.addSource('cadastral-data', {
-                    type: 'geojson',
-                    data: {
-                        type: 'FeatureCollection',
-                        features: []
-                    }
-                });
-
-                // Add fill layer for polygons
-                this.map.addLayer({
-                    id: 'cadastral-fill',
-                    type: 'fill',
-                    source: 'cadastral-data',
-                    paint: {
-                        'fill-color': '#007cba',
-                        'fill-opacity': 0.3
-                    }
-                });
-
-                // Add outline layer for borders
-                this.map.addLayer({
-                    id: 'cadastral-outline',
-                    type: 'line',
-                    source: 'cadastral-data',
-                    paint: {
-                        'line-color': '#007cba',
-                        'line-width': 2
-                    }
-                });
-
-                // Add labels layer
-                this.map.addLayer({
-                    id: 'cadastral-labels',
-                    type: 'symbol',
-                    source: 'cadastral-data',
-                    layout: {
-                        'text-field': ['concat', 'Survey: ', ['get', 'survey'], '\nSubdiv: ', ['get', 'subdiv']],
-                        'text-font': ['Open Sans Regular'],
-                        'text-size': 10,
-                        'text-anchor': 'center'
-                    },
-                    paint: {
-                        'text-color': '#000',
-                        'text-halo-color': '#fff',
-                        'text-halo-width': 1
-                    }
-                });
-
-                // Add click handler for features
-                this.map.on('click', 'cadastral-fill', (e) => {
-                    const feature = e.features[0];
-                    if (feature) {
-                        new maplibregl.Popup()
-                            .setLngLat(e.lngLat)
-                            .setHTML(`
-                                <div style="font-size: 12px;">
-                                    <strong>Cadastral Information</strong><br>
-                                    <strong>Taluka:</strong> ${feature.properties.taluka}<br>
-                                    <strong>Village:</strong> ${feature.properties.village}<br>
-                                    <strong>Survey:</strong> ${feature.properties.survey}<br>
-                                    <strong>Subdiv:</strong> ${feature.properties.subdiv}
-                                </div>
-                            `)
-                            .addTo(this.map);
-                    }
-                });
-
-                // Change cursor on hover
-                this.map.on('mouseenter', 'cadastral-fill', () => {
-                    this.map.getCanvas().style.cursor = 'pointer';
-                });
-
-                this.map.on('mouseleave', 'cadastral-fill', () => {
-                    this.map.getCanvas().style.cursor = '';
-                });
-            });
+            console.log('Google Maps initialized successfully');
 
         } catch (error) {
             console.error('Failed to initialize map:', error);
@@ -525,7 +433,7 @@ class CadastralDataApp {
 
     async loadVillageData(villageName, surveyNo = null, subdivNo = null) {
         $('#loading').show();
-        $('#results').empty();
+        // Don't clear results - we want to append to existing data
 
         try {
             // Load village parquet file on-demand
@@ -615,47 +523,76 @@ class CadastralDataApp {
 
     displayResults(data, surveyFilter = null, subdivFilter = null) {
         if (data.length === 0) {
-            $('#results').html('<p>No data found for the selected criteria</p>');
-            $('#map-container').hide();
+            // Only show "no data" message if there's no existing table
+            if ($('#results table tbody tr').length === 0) {
+                $('#results').html('<p>No data found for the selected criteria</p>');
+                $('#map-container').hide();
+            }
             return;
         }
 
-        let filterText = '';
-        if (surveyFilter) filterText += ` (Survey: ${surveyFilter})`;
-        if (subdivFilter) filterText += ` (Subdiv: ${subdivFilter})`;
+        // Initialize geometry data storage if not exists
+        if (!window.geometryData) {
+            window.geometryData = {};
+        }
+        // Initialize or keep existing geometry IDs array (don't reset it!)
+        if (!window.currentGeometryIds) {
+            window.currentGeometryIds = [];
+        }
 
-        let html = `
-            <h3>Cadastral Data${filterText} (${data.length} records)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Taluka</th>
-                            <th>Village</th>
-                            <th>Survey</th>
-                            <th>Subdiv</th>
-                            <th>Records</th>
-                            <th>Geometry</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
+        // Check if table already exists
+        const existingTable = $('#results table tbody');
+        const tableExists = existingTable.length > 0;
+
+        // If table doesn't exist, create it
+        if (!tableExists) {
+            let html = `
+                <h3>Cadastral Data (0 records)</h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    💡 Click on any row to zoom to that parcel on the map<br>
+                    🎨 Use the color picker to customize each polygon's color
+                </p>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Taluka</th>
+                                <th>Village</th>
+                                <th>Survey</th>
+                                <th>Subdiv</th>
+                                <th>Records</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            $('#results').html(html);
+        }
 
         // Collect valid GeoJSON features for the map
         const mapFeatures = [];
         let hasGeometry = false;
 
+        // Generate unique index offset based on existing geometries
+        const indexOffset = window.currentGeometryIds.length;
+
         data.forEach((row, index) => {
             let geometryDisplay = '';
             let hasValidGeometry = false;
             let geometryForZoom = null;
+            let geometryId = null;
             
             if (row.geometry_geojson) {
-                const geometryId = `geometry-${index}`;
+                // Use unique ID with timestamp and offset to avoid conflicts
+                geometryId = `geometry-${Date.now()}-${indexOffset + index}`;
                 
                 // Ensure we have a string to work with
                 let geometryString = '';
+                let geojsonGeometry = null;
+                
                 try {
                     if (typeof row.geometry_geojson === 'string') {
                         geometryString = row.geometry_geojson;
@@ -664,85 +601,96 @@ class CadastralDataApp {
                     } else {
                         geometryString = String(row.geometry_geojson);
                     }
+                    
+                    // Try to parse and add to map if it's valid GeoJSON
+                    if (geometryString && !geometryString.includes('WKB Binary')) {
+                        try {
+                            geojsonGeometry = JSON.parse(geometryString);
+                            if (geojsonGeometry && geojsonGeometry.type) {
+                                // Convert any BigInt values to regular numbers
+                                const safeProperties = {
+                                    taluka: String(row.taluka || ''),
+                                    village: String(row.village || ''),
+                                    survey: String(row.survey || ''),
+                                    subdiv: String(row.subdiv || ''),
+                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
+                                };
+                                
+                                mapFeatures.push({
+                                    type: 'Feature',
+                                    geometry: geojsonGeometry,
+                                    properties: {
+                                        ...safeProperties,
+                                        geometryId: geometryId
+                                    }
+                                });
+                                hasGeometry = true;
+                                hasValidGeometry = true;
+                                geometryForZoom = geojsonGeometry;
+                                
+                                // Store geometry data for button/download access
+                                const filenameParts = [
+                                    safeProperties.village || 'village',
+                                    safeProperties.survey || 'survey',
+                                    safeProperties.subdiv || 'subdiv'
+                                ];
+                                const baseName = filenameParts.join('_').replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                // Ensure uniqueness even when survey + subdiv repeat
+                                const filename = `${baseName}_(${index + 1})`;
+                                
+                                window.geometryData[geometryId] = {
+                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
+                                    geometry: geojsonGeometry,
+                                    filename,
+                                    properties: safeProperties
+                                };
+                                // Track this geometry for master download
+                                window.currentGeometryIds.push(geometryId);
+                            }
+                        } catch (parseError) {
+                            console.warn('Could not parse geometry as GeoJSON:', parseError);
+                        }
+                    }
                 } catch (e) {
                     console.error('Error converting geometry to string:', e);
-                    geometryString = 'Error displaying geometry';
                 }
                 
-                // Try to parse and add to map if it's valid GeoJSON
-                if (geometryString && !geometryString.includes('WKB Binary')) {
-                    try {
-                        const geojsonGeometry = JSON.parse(geometryString);
-                        if (geojsonGeometry && geojsonGeometry.type) {
-                            // Convert any BigInt values to regular numbers
-                            const safeProperties = {
-                                taluka: String(row.taluka || ''),
-                                village: String(row.village || ''),
-                                survey: String(row.survey || ''),
-                                subdiv: String(row.subdiv || ''),
-                                records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
-                            };
-                            
-                            mapFeatures.push({
-                                type: 'Feature',
-                                geometry: geojsonGeometry,
-                                properties: safeProperties
-                            });
-                            hasGeometry = true;
-                            hasValidGeometry = true;
-                            geometryForZoom = geojsonGeometry;
-                        }
-                    } catch (parseError) {
-                        console.warn('Could not parse geometry as GeoJSON:', parseError);
-                    }
-                }
-                
-                // Try to format the GeoJSON nicely
-                let formattedGeojson = geometryString;
-                try {
-                    const parsed = JSON.parse(geometryString);
-                    formattedGeojson = JSON.stringify(parsed, null, 2);
-                } catch (e) {
-                    // If parsing fails, use original string
-                    formattedGeojson = geometryString;
-                }
-                
-                const shortGeometry = geometryString.length > 100 ? 
-                    geometryString.substring(0, 100) + '...' : 
-                    geometryString;
-                
-                // Escape the geometry string properly for HTML attributes
-                const escapedGeometry = formattedGeojson
-                    .replace(/\\/g, '\\\\')
-                    .replace(/`/g, '\\`')
-                    .replace(/\n/g, '\\n')
-                    .replace(/\r/g, '\\r')
-                    .replace(/'/g, "\\'");
-                
-                geometryDisplay = `
-                    <div>
-                        <div id="${geometryId}-short" style="font-family: monospace; font-size: 11px; background: #f8f9fa; padding: 4px; border-radius: 3px;">${shortGeometry}</div>
-                        <button onclick="toggleGeometry('${geometryId}')" 
-                                style="padding: 2px 6px; font-size: 11px; margin-top: 4px; background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                            Show Full GeoJSON
-                        </button>
-                        <div id="${geometryId}-full" style="display: none;">
-                            <textarea readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 10px; margin-top: 4px; border: 1px solid #ccc; border-radius: 3px; padding: 5px;">
-${formattedGeojson}
-                            </textarea>
-                            <div style="margin-top: 4px;">
-                                <button onclick="copyGeojson('${geometryId}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; margin-right: 5px;">
-                                    Copy GeoJSON
-                                </button>
-                                <button onclick="downloadGeojson('${geometryId}', '${row.village}_${row.survey}_${row.subdiv}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                                    Download
-                                </button>
-                            </div>
+                if (hasValidGeometry) {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="color" 
+                                   value="#007cba" 
+                                   title="Change polygon color"
+                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
+                                   onclick="event.stopPropagation();"
+                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
+                            <button onclick="copyKML('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Download KML
+                            </button>
+                            <button onclick="copyGeoJSON('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Copy GeoJSON
+                            </button>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <em>No geometry data</em>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
+                        </div>
+                    `;
+                }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
             }
@@ -751,9 +699,10 @@ ${formattedGeojson}
             const rowClass = hasValidGeometry ? 'clickable-row' : '';
             const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
+            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
-            html += `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} 
+            const rowHtml = `
+                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
                     <td>${row.taluka}</td>
@@ -761,148 +710,211 @@ ${formattedGeojson}
                     <td>${row.survey}</td>
                     <td>${row.subdiv}</td>
                     <td>${row.record_count}</td>
-                    <td style="max-width: 350px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
+                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
+            
+            // Append row to existing tbody
+            $('#results table tbody').append(rowHtml);
         });
 
-        html += '</tbody></table></div>';
-        
-        // Add the JavaScript function for toggling geometry display
-        html += `
-            <script>
-                function toggleGeometry(geometryId) {
-                    const shortDiv = document.getElementById(geometryId + '-short');
-                    const fullDiv = document.getElementById(geometryId + '-full');
-                    const button = event.target;
-                    
-                    if (fullDiv.style.display === 'none') {
-                        shortDiv.style.display = 'none';
-                        fullDiv.style.display = 'block';
-                        button.textContent = 'Show Short';
-                    } else {
-                        shortDiv.style.display = 'block';
-                        fullDiv.style.display = 'none';
-                        button.textContent = 'Show Full GeoJSON';
-                    }
-                }
-                
-                function copyGeojson(geometryId) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    // Find the copy button for this geometry
-                    const copyButton = document.querySelector('#' + geometryId + '-full button[onclick*="copyGeojson"]');
-                    
-                    // Use the modern clipboard API
-                    if (navigator.clipboard && window.isSecureContext) {
-                        navigator.clipboard.writeText(geojsonContent).then(() => {
-                            // Temporarily change button text to show success
-                            if (copyButton) {
-                                const originalText = copyButton.textContent;
-                                const originalColor = copyButton.style.backgroundColor;
-                                copyButton.textContent = 'Copied!';
-                                copyButton.style.backgroundColor = '#198754';
-                                setTimeout(() => {
-                                    copyButton.textContent = originalText;
-                                    copyButton.style.backgroundColor = originalColor || '#28a745';
-                                }, 1500);
-                            }
-                        }).catch(err => {
-                            console.error('Failed to copy: ', err);
-                            alert('Failed to copy to clipboard');
-                        });
-                    } else {
-                        // Fallback for older browsers
-                        textarea.select();
-                        document.execCommand('copy');
-                        alert('GeoJSON copied to clipboard!');
-                    }
-                }
-                
-                function downloadGeojson(geometryId, filename) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    // Create a blob with the GeoJSON content
-                    const blob = new Blob([geojsonContent], { type: 'application/geo+json' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    // Create a temporary download link
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename + '.geojson';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }
-            </script>
-        `;
-        
-        $('#results').html(html);
+        // Update the record count in the header
+        const totalRecords = $('#results table tbody tr').length;
+        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
 
-        // Update map with new data
-        this.updateMap(mapFeatures, hasGeometry);
+        // Show/hide master download button based on geometry availability
+        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
+            $('#download-all-container').css('display', 'flex');
+        } else {
+            $('#download-all-container').hide();
+        }
+
+        // Update map with new data (append mode)
+        this.updateMap(mapFeatures, hasGeometry, true);
     }
 
-    updateMap(features, hasGeometry) {
-        if (!this.map || !this.map.isStyleLoaded()) {
+    updateMap(features, hasGeometry, appendMode = false) {
+        if (!this.map) {
             console.warn('Map not ready yet');
             return;
         }
 
         try {
-            // Update map source with new features
-            const source = this.map.getSource('cadastral-data');
-            if (source) {
-                source.setData({
-                    type: 'FeatureCollection',
-                    features: features
-                });
-
-                // Store features for other operations
+            // Only clear existing polygons if not in append mode
+            if (!appendMode) {
+                this.clearMapPolygons();
                 this.mapFeatures = features;
+            } else {
+                // Append new features to existing ones
+                this.mapFeatures = this.mapFeatures ? [...this.mapFeatures, ...features] : features;
+            }
 
-                // Show/hide map based on whether we have geometry data
-                if (hasGeometry && features.length > 0) {
-                    $('#map-container').show();
-                    
-                    // Update map info
-                    $('#map-info').text(`Showing ${features.length} cadastral parcels`);
-                    
-                    // Fit map to show all features
-                    setTimeout(() => {
-                        this.fitMapToBounds();
-                    }, 100);
-                } else {
-                    $('#map-container').hide();
-                }
+            // Show/hide map based on whether we have geometry data
+            if (hasGeometry && features.length > 0) {
+                $('#map-container').show();
+                
+                // Update map info to show total features
+                const totalFeatures = this.mapFeatures ? this.mapFeatures.length : 0;
+                $('#map-info').text(`Showing ${totalFeatures} cadastral parcels`);
+                
+                // Add new polygons to map
+                features.forEach((feature, index) => {
+                    this.addPolygonToMap(feature, index);
+                });
+                
+                // Fit map to show all features
+                setTimeout(() => {
+                    this.fitMapToBounds();
+                }, 100);
+            } else if (!appendMode) {
+                // Only hide map if not in append mode and no geometry
+                $('#map-container').hide();
             }
         } catch (error) {
             console.error('Error updating map:', error);
         }
     }
 
-    fitMapToBounds() {
-        if (!this.mapFeatures || this.mapFeatures.length === 0) return;
+    // Method to change polygon color
+    changePolygonColor(geometryId, newColor) {
+        if (!geometryId || !newColor) return;
+
+        const polygonData = this.polygonColorMap[geometryId];
+        if (polygonData && polygonData.polygon) {
+            // Update the polygon's colors
+            polygonData.polygon.setOptions({
+                strokeColor: newColor,
+                fillColor: newColor
+            });
+            
+            // Save the color for future reloads
+            polygonData.color = newColor;
+        }
+    }
+
+    clearMapPolygons() {
+        // Remove all existing polygons from the map
+        this.mapPolygons.forEach(polygon => {
+            polygon.setMap(null);
+        });
+        this.mapPolygons = [];
+
+        // Close all info windows
+        this.mapInfoWindows.forEach(infoWindow => {
+            infoWindow.close();
+        });
+        this.mapInfoWindows = [];
+        
+        // Clear the polygon color map (but keep the colors for potential reloads)
+        // Only clear references to polygon objects, not the color preferences
+        Object.keys(this.polygonColorMap).forEach(key => {
+            if (this.polygonColorMap[key]) {
+                // Keep the color, but clear the polygon reference
+                const savedColor = this.polygonColorMap[key].color;
+                this.polygonColorMap[key] = { color: savedColor, polygon: null };
+            }
+        });
+    }
+
+    addPolygonToMap(feature, index) {
+        if (!feature.geometry || !this.map) return;
 
         try {
-            const bounds = new maplibregl.LngLatBounds();
+            const geometry = feature.geometry;
+            let paths = [];
+
+            if (geometry.type === 'Polygon') {
+                // Convert GeoJSON coordinates to Google Maps LatLng format
+                paths = geometry.coordinates[0].map(coord => ({
+                    lat: coord[1],
+                    lng: coord[0]
+                }));
+            } else if (geometry.type === 'MultiPolygon') {
+                // For MultiPolygon, use the first polygon
+                paths = geometry.coordinates[0][0].map(coord => ({
+                    lat: coord[1],
+                    lng: coord[0]
+                }));
+            } else {
+                console.warn('Unsupported geometry type:', geometry.type);
+                return;
+            }
+
+            // Get geometry ID from feature properties
+            const geometryId = feature.properties.geometryId || `fallback-geometry-${index}`;
+            
+            // Check if there's a saved color for this geometry
+            const savedColor = this.polygonColorMap[geometryId]?.color || '#007cba';
+
+            // Create polygon with styling
+            const polygon = new google.maps.Polygon({
+                paths: paths,
+                strokeColor: savedColor,
+                strokeOpacity: 1.0,
+                strokeWeight: 2,
+                fillColor: savedColor,
+                fillOpacity: 0.3,
+                map: this.map
+            });
+
+            // Create info window content
+            const infoContent = `
+                <div style="font-size: 12px;">
+                    <strong>Cadastral Information</strong><br>
+                    <strong>Taluka:</strong> ${feature.properties.taluka || 'N/A'}<br>
+                    <strong>Village:</strong> ${feature.properties.village || 'N/A'}<br>
+                    <strong>Survey:</strong> ${feature.properties.survey || 'N/A'}<br>
+                    <strong>Subdiv:</strong> ${feature.properties.subdiv || 'N/A'}
+                </div>
+            `;
+
+            const infoWindow = new google.maps.InfoWindow({
+                content: infoContent
+            });
+
+            // Add click listener to polygon
+            polygon.addListener('click', (event) => {
+                // Close all other info windows
+                this.mapInfoWindows.forEach(iw => iw.close());
+                
+                infoWindow.setPosition(event.latLng);
+                infoWindow.open(this.map);
+            });
+
+            // Store polygon and info window
+            this.mapPolygons.push(polygon);
+            this.mapInfoWindows.push(infoWindow);
+            
+            // Store polygon in color map for later color updates
+            this.polygonColorMap[geometryId] = {
+                polygon: polygon,
+                color: savedColor
+            };
+
+        } catch (error) {
+            console.error('Error adding polygon to map:', error);
+        }
+    }
+
+    fitMapToBounds() {
+        if (!this.mapFeatures || this.mapFeatures.length === 0 || !this.map) return;
+
+        try {
+            const bounds = new google.maps.LatLngBounds();
             
             this.mapFeatures.forEach(feature => {
                 if (feature.geometry.type === 'Polygon') {
                     feature.geometry.coordinates[0].forEach(coord => {
-                        bounds.extend(coord);
+                        bounds.extend({ lat: coord[1], lng: coord[0] });
                     });
                 } else if (feature.geometry.type === 'MultiPolygon') {
                     feature.geometry.coordinates.forEach(polygon => {
                         polygon[0].forEach(coord => {
-                            bounds.extend(coord);
+                            bounds.extend({ lat: coord[1], lng: coord[0] });
                         });
                     });
                 } else if (feature.geometry.type === 'Point') {
-                    bounds.extend(feature.geometry.coordinates);
+                    bounds.extend({ lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0] });
                 }
             });
 
@@ -1008,28 +1020,17 @@ ${formattedGeojson}
         });
 
         $('#toggle-labels').on('click', () => {
-            if (this.map && this.map.isStyleLoaded()) {
-                const visibility = this.map.getLayoutProperty('cadastral-labels', 'visibility');
-                const newVisibility = visibility === 'visible' ? 'none' : 'visible';
-                this.map.setLayoutProperty('cadastral-labels', 'visibility', newVisibility);
-                
-                const button = $('#toggle-labels');
-                button.text(newVisibility === 'visible' ? 'Hide Labels' : 'Show Labels');
-            }
+            // Labels functionality not applicable for Google Maps polygons
+            // Could be implemented with markers if needed
+            console.log('Label toggle not implemented for Google Maps');
         });
 
         $('#clear-map').on('click', () => {
-            if (this.map && this.map.isStyleLoaded()) {
-                const source = this.map.getSource('cadastral-data');
-                if (source) {
-                    source.setData({
-                        type: 'FeatureCollection',
-                        features: []
-                    });
-                    this.mapFeatures = [];
-                    $('#map-info').text('Map cleared');
-                    $('#map-container').hide();
-                }
+            if (this.map) {
+                this.clearMapPolygons();
+                this.mapFeatures = [];
+                $('#map-info').text('Map cleared');
+                $('#map-container').hide();
             }
         });
     }
@@ -1136,7 +1137,7 @@ Mormugao,Vasco,789,C`;
 
     async performBulkSearch(searchCriteria) {
         $('#loading').show();
-        $('#results').empty();
+        // Don't clear results - we want to append to existing data
 
         try {
             const allResults = [];
@@ -1163,9 +1164,9 @@ Mormugao,Vasco,789,C`;
 
             $('#csv-status').html(`<span style="color: #28a745;">✓ Found ${allResults.length} records</span>`);
             
-            // Display results
-            this.displayBulkResults(allResults, searchCriteria.length);
-            this.updateMap(allMapFeatures, hasGeometry);
+            // Display results - pass mapFeatures so we can match geometryIds
+            this.displayBulkResults(allResults, searchCriteria.length, allMapFeatures);
+            this.updateMap(allMapFeatures, hasGeometry, true);
 
         } catch (error) {
             console.error('Error in bulk search:', error);
@@ -1253,7 +1254,7 @@ Mormugao,Vasco,789,C`;
             let hasGeometry = false;
 
             // Process geometry data for map
-            data.forEach(row => {
+            data.forEach((row, index) => {
                 if (row.geometry_geojson && !row.geometry_geojson.includes('WKB Binary')) {
                     try {
                         const geometryString = typeof row.geometry_geojson === 'string' 
@@ -1270,10 +1271,16 @@ Mormugao,Vasco,789,C`;
                                 records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
                             };
                             
+                            // Generate geometry ID for this feature
+                            const geometryId = `bulk-geometry-${Date.now()}-${index}`;
+                            
                             mapFeatures.push({
                                 type: 'Feature',
                                 geometry: geojsonGeometry,
-                                properties: safeProperties
+                                properties: {
+                                    ...safeProperties,
+                                    geometryId: geometryId
+                                }
                             });
                             hasGeometry = true;
                         }
@@ -1290,39 +1297,95 @@ Mormugao,Vasco,789,C`;
         }
     }
 
-    displayBulkResults(data, searchCount) {
+    displayBulkResults(data, searchCount, mapFeatures = []) {
         if (data.length === 0) {
-            $('#results').html('<p>No data found for the search criteria</p>');
+            // Only show "no data" message if there's no existing table
+            if ($('#results table tbody tr').length === 0) {
+                $('#results').html('<p>No data found for the search criteria</p>');
+            }
             return;
         }
 
-        let html = `
-            <h3>Bulk Search Results (${data.length} records from ${searchCount} searches)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">💡 Click on any row to zoom to that parcel on the map</p>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Taluka</th>
-                            <th>Village</th>
-                            <th>Survey</th>
-                            <th>Subdiv</th>
-                            <th>Records</th>
-                            <th>Geometry</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
+        // Initialize geometry data storage if not exists
+        if (!window.geometryData) {
+            window.geometryData = {};
+        }
+        // Initialize or keep existing geometry IDs array (don't reset it!)
+        if (!window.currentGeometryIds) {
+            window.currentGeometryIds = [];
+        }
+
+        // Check if table already exists
+        const existingTable = $('#results table tbody');
+        const tableExists = existingTable.length > 0;
+
+        // If table doesn't exist, create it
+        if (!tableExists) {
+            let html = `
+                <h3>Cadastral Data (0 records)</h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    💡 Click on any row to zoom to that parcel on the map<br>
+                    🎨 Use the color picker to customize each polygon's color
+                </p>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Taluka</th>
+                                <th>Village</th>
+                                <th>Survey</th>
+                                <th>Subdiv</th>
+                                <th>Records</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            $('#results').html(html);
+        }
+
+        // Create a map of data rows to their corresponding mapFeatures for geometryId lookup
+        const dataToFeatureMap = new Map();
+        mapFeatures.forEach(feature => {
+            const key = `${feature.properties.taluka}-${feature.properties.village}-${feature.properties.survey}-${feature.properties.subdiv}`;
+            if (!dataToFeatureMap.has(key)) {
+                dataToFeatureMap.set(key, []);
+            }
+            dataToFeatureMap.get(key).push(feature);
+        });
+
+        // Generate unique index offset based on existing geometries
+        const indexOffset = window.currentGeometryIds.length;
 
         data.forEach((row, index) => {
             let geometryDisplay = '';
             let hasValidGeometry = false;
             let geometryForZoom = null;
+            let geometryId = null;
+            
+            // Try to find matching mapFeature to get the correct geometryId
+            const rowKey = `${row.taluka}-${row.village}-${row.survey}-${row.subdiv}`;
+            const matchingFeatures = dataToFeatureMap.get(rowKey) || [];
+            let matchingFeature = null;
+            
+            if (matchingFeatures.length > 0) {
+                // Use the first unassigned feature or fallback to first
+                matchingFeature = matchingFeatures.shift();
+                geometryId = matchingFeature.properties.geometryId;
+            }
             
             if (row.geometry_geojson) {
-                const geometryId = `geometry-${index}`;
+                // If we didn't find a matching feature, create a fallback geometryId
+                if (!geometryId) {
+                    geometryId = `bulk-geometry-fallback-${index}`;
+                }
                 
                 let geometryString = '';
+                let geojsonGeometry = null;
+                
                 try {
                     if (typeof row.geometry_geojson === 'string') {
                         geometryString = row.geometry_geojson;
@@ -1331,59 +1394,86 @@ Mormugao,Vasco,789,C`;
                     } else {
                         geometryString = String(row.geometry_geojson);
                     }
-                } catch (e) {
-                    geometryString = 'Error displaying geometry';
-                }
-                
-                // Check if this is valid GeoJSON for zoom functionality
-                if (geometryString && !geometryString.includes('WKB Binary')) {
-                    try {
-                        const geojsonGeometry = JSON.parse(geometryString);
-                        if (geojsonGeometry && geojsonGeometry.type) {
-                            hasValidGeometry = true;
-                            geometryForZoom = geojsonGeometry;
+                    
+                    // Check if this is valid GeoJSON for zoom functionality
+                    if (geometryString && !geometryString.includes('WKB Binary')) {
+                        try {
+                            geojsonGeometry = JSON.parse(geometryString);
+                            if (geojsonGeometry && geojsonGeometry.type) {
+                                hasValidGeometry = true;
+                                geometryForZoom = geojsonGeometry;
+                                
+                                // Store geometry data for button/download access
+                                const safeTaluka = String(row.taluka || 'taluka');
+                                const safeVillage = String(row.village || 'village');
+                                const safeSurvey = String(row.survey || 'survey');
+                                const safeSubdiv = String(row.subdiv || 'subdiv');
+                                const baseName = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+                                // Ensure uniqueness even when survey + subdiv repeat
+                                const filename = `${baseName}_(${index + 1})`;
+
+                                const safeProperties = {
+                                    taluka: safeTaluka,
+                                    village: safeVillage,
+                                    survey: safeSurvey,
+                                    subdiv: safeSubdiv,
+                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
+                                };
+                                
+                                window.geometryData[geometryId] = {
+                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
+                                    geometry: geojsonGeometry,
+                                    filename,
+                                    properties: safeProperties
+                                };
+
+                                // Track this geometry for master download and future map updates
+                                window.currentGeometryIds.push(geometryId);
+                            }
+                        } catch (parseError) {
+                            console.warn('Could not parse geometry as GeoJSON:', parseError);
                         }
-                    } catch (parseError) {
-                        console.warn('Could not parse geometry as GeoJSON:', parseError);
                     }
-                }
-                
-                let formattedGeojson = geometryString;
-                try {
-                    const parsed = JSON.parse(geometryString);
-                    formattedGeojson = JSON.stringify(parsed, null, 2);
                 } catch (e) {
-                    formattedGeojson = geometryString;
+                    console.error('Error processing geometry:', e);
                 }
                 
-                const shortGeometry = geometryString.length > 100 ? 
-                    geometryString.substring(0, 100) + '...' : 
-                    geometryString;
-                
-                geometryDisplay = `
-                    <div>
-                        <div id="${geometryId}-short" style="font-family: monospace; font-size: 11px; background: #f8f9fa; padding: 4px; border-radius: 3px;">${shortGeometry}</div>
-                        <button onclick="toggleGeometry('${geometryId}')" 
-                                style="padding: 2px 6px; font-size: 11px; margin-top: 4px; background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                            Show Full GeoJSON
-                        </button>
-                        <div id="${geometryId}-full" style="display: none;">
-                            <textarea readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 10px; margin-top: 4px; border: 1px solid #ccc; border-radius: 3px; padding: 5px;">
-${formattedGeojson}
-                            </textarea>
-                            <div style="margin-top: 4px;">
-                                <button onclick="copyGeojson('${geometryId}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; margin-right: 5px;">
-                                    Copy GeoJSON
-                                </button>
-                                <button onclick="downloadGeojson('${geometryId}', '${row.village}_${row.survey}_${row.subdiv}')" 
-                                        style="padding: 2px 6px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">
-                                    Download
-                                </button>
-                            </div>
+                if (hasValidGeometry) {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="color" 
+                                   value="#007cba" 
+                                   title="Change polygon color"
+                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
+                                   onclick="event.stopPropagation();"
+                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
+                            <button onclick="copyKML('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Download KML
+                            </button>
+                            <button onclick="copyGeoJSON('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Copy GeoJSON
+                            </button>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    geometryDisplay = `
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <em>No geometry data</em>
+                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
+                                    title="Remove this row from the table"
+                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                &#128465;
+                            </button>
+                        </div>
+                    `;
+                }
             } else {
                 geometryDisplay = '<em>No geometry data</em>';
             }
@@ -1392,9 +1482,10 @@ ${formattedGeojson}
             const rowClass = hasValidGeometry ? 'clickable-row' : '';
             const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
+            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
-            html += `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler}
+            const rowHtml = `
+                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
                     <td>${row.taluka}</td>
@@ -1402,115 +1493,56 @@ ${formattedGeojson}
                     <td>${row.survey}</td>
                     <td>${row.subdiv}</td>
                     <td>${row.record_count}</td>
-                    <td style="max-width: 350px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
+                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
+            
+            // Append row to existing tbody
+            $('#results table tbody').append(rowHtml);
         });
 
-        html += '</tbody></table></div>';
+        // Update the record count in the header
+        const totalRecords = $('#results table tbody tr').length;
+        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
         
-        // Add the JavaScript functions (same as before)
-        html += `
-            <script>
-                function toggleGeometry(geometryId) {
-                    const shortDiv = document.getElementById(geometryId + '-short');
-                    const fullDiv = document.getElementById(geometryId + '-full');
-                    const button = event.target;
-                    
-                    if (fullDiv.style.display === 'none') {
-                        shortDiv.style.display = 'none';
-                        fullDiv.style.display = 'block';
-                        button.textContent = 'Show Short';
-                    } else {
-                        shortDiv.style.display = 'block';
-                        fullDiv.style.display = 'none';
-                        button.textContent = 'Show Full GeoJSON';
-                    }
-                }
-                
-                function copyGeojson(geometryId) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    const copyButton = document.querySelector('#' + geometryId + '-full button[onclick*="copyGeojson"]');
-                    
-                    if (navigator.clipboard && window.isSecureContext) {
-                        navigator.clipboard.writeText(geojsonContent).then(() => {
-                            if (copyButton) {
-                                const originalText = copyButton.textContent;
-                                const originalColor = copyButton.style.backgroundColor;
-                                copyButton.textContent = 'Copied!';
-                                copyButton.style.backgroundColor = '#198754';
-                                setTimeout(() => {
-                                    copyButton.textContent = originalText;
-                                    copyButton.style.backgroundColor = originalColor || '#28a745';
-                                }, 1500);
-                            }
-                        }).catch(err => {
-                            console.error('Failed to copy: ', err);
-                            alert('Failed to copy to clipboard');
-                        });
-                    } else {
-                        textarea.select();
-                        document.execCommand('copy');
-                        alert('GeoJSON copied to clipboard!');
-                    }
-                }
-                
-                function downloadGeojson(geometryId, filename) {
-                    const textarea = document.querySelector('#' + geometryId + '-full textarea');
-                    const geojsonContent = textarea.value;
-                    
-                    const blob = new Blob([geojsonContent], { type: 'application/geo+json' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename + '.geojson';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }
-            </script>
-        `;
-        
-        $('#results').html(html);
+        // Show/hide master download button based on geometry availability
+        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
+            $('#download-all-container').css('display', 'flex');
+        } else {
+            $('#download-all-container').hide();
+        }
     }
 
     // Add method to zoom to specific geometry
     zoomToGeometry(geometry) {
-        if (!this.map || !this.map.isStyleLoaded() || !geometry) {
+        if (!this.map || !geometry) {
             console.warn('Map not ready or no geometry provided');
             return;
         }
 
         try {
-            const bounds = new maplibregl.LngLatBounds();
+            const bounds = new google.maps.LatLngBounds();
             
             if (geometry.type === 'Polygon') {
                 geometry.coordinates[0].forEach(coord => {
-                    bounds.extend(coord);
+                    bounds.extend({ lat: coord[1], lng: coord[0] });
                 });
             } else if (geometry.type === 'MultiPolygon') {
                 geometry.coordinates.forEach(polygon => {
                     polygon[0].forEach(coord => {
-                        bounds.extend(coord);
+                        bounds.extend({ lat: coord[1], lng: coord[0] });
                     });
                 });
             } else if (geometry.type === 'Point') {
-                bounds.extend(geometry.coordinates);
+                bounds.extend({ lat: geometry.coordinates[1], lng: geometry.coordinates[0] });
                 // For points, add some padding since a single point doesn't create bounds
                 const padding = 0.001; // roughly 100m
-                bounds.extend([geometry.coordinates[0] - padding, geometry.coordinates[1] - padding]);
-                bounds.extend([geometry.coordinates[0] + padding, geometry.coordinates[1] + padding]);
+                bounds.extend({ lat: geometry.coordinates[1] - padding, lng: geometry.coordinates[0] - padding });
+                bounds.extend({ lat: geometry.coordinates[1] + padding, lng: geometry.coordinates[0] + padding });
             }
 
             // Zoom to the bounds with some padding
-            this.map.fitBounds(bounds, { 
-                padding: 100,
-                maxZoom: 18 // Prevent zooming too close
-            });
+            this.map.fitBounds(bounds, { padding: 100 });
 
             // Show map container if it's hidden
             $('#map-container').show();
@@ -1519,9 +1551,268 @@ ${formattedGeojson}
             console.error('Error zooming to geometry:', error);
         }
     }
+
+    // Remove a single geometry (and its polygon) from the map using its geometry ID
+    removeGeometryById(geometryId) {
+        if (!geometryId) return;
+
+        try {
+            // Remove from currentGeometryIds (used for "Download All")
+            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
+                window.currentGeometryIds = window.currentGeometryIds.filter(id => id !== geometryId);
+                if (window.currentGeometryIds.length === 0) {
+                    $('#download-all-container').hide();
+                }
+            }
+
+            // Remove stored geometry data
+            if (window.geometryData && window.geometryData[geometryId]) {
+                delete window.geometryData[geometryId];
+            }
+            
+            // Rebuild map features from remaining geometry data and refresh map
+            const remainingFeatures = [];
+            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
+                window.currentGeometryIds.forEach(id => {
+                    const g = window.geometryData && window.geometryData[id];
+                    if (g && g.geometry) {
+                        remainingFeatures.push({
+                            type: 'Feature',
+                            geometry: g.geometry,
+                            properties: g.properties || {}
+                        });
+                    }
+                });
+            }
+
+            const hasGeometry = remainingFeatures.length > 0;
+            this.updateMap(remainingFeatures, hasGeometry);
+
+            // Update map info / visibility text if element exists
+            if (!hasGeometry) {
+                $('#map-info').text('Map cleared');
+            } else {
+                $('#map-info').text(`Showing ${remainingFeatures.length} cadastral parcels`);
+            }
+        } catch (error) {
+            console.error('Error removing geometry by ID:', error);
+        }
+    }
 }
 
-// Initialize the app when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    window.cadastralApp = new CadastralDataApp();
-});
+// Global functions for downloading KML and copying GeoJSON
+window.copyKML = function(geometryId) {
+    const geometryData = window.geometryData && window.geometryData[geometryId];
+    if (!geometryData || !geometryData.geometry) {
+        alert('No geometry data available');
+        return;
+    }
+    
+    // Create a Feature for tokml (it expects a Feature or FeatureCollection)
+    const feature = {
+        type: 'Feature',
+        geometry: geometryData.geometry,
+        properties: {}
+    };
+    
+    // Use tokml library if available
+    let kml;
+    if (typeof tokml !== 'undefined') {
+        kml = tokml(feature);
+    } else {
+        alert('KML converter library not loaded');
+        return;
+    }
+    
+    // Determine filename for download
+    const baseName = geometryData.filename || 'parcel';
+    const fileName = `${baseName}.kml`;
+    
+    // Create a blob and trigger download
+    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
+
+// Master download: ZIP containing KML + GeoJSON for all visible plots
+window.downloadAllGeometries = function() {
+    if (!window.currentGeometryIds || window.currentGeometryIds.length === 0) {
+        alert('No plots with geometry available to download');
+        return;
+    }
+
+    if (typeof JSZip === 'undefined') {
+        alert('ZIP library (JSZip) not loaded');
+        return;
+    }
+
+    if (typeof tokml === 'undefined') {
+        alert('KML converter library (tokml) not loaded');
+        return;
+    }
+
+    const zip = new JSZip();
+    let filesAdded = 0;
+
+    window.currentGeometryIds.forEach((geometryId, index) => {
+        const geometryData = window.geometryData && window.geometryData[geometryId];
+        if (!geometryData || !geometryData.geometry || !geometryData.geojson) {
+            return;
+        }
+
+        const baseName = geometryData.filename || `plot_${index + 1}`;
+        const folder = zip.folder(baseName);
+
+        // Prepare GeoJSON content
+        const geojsonContent = geometryData.geojson;
+        folder.file(`${baseName}.geojson`, geojsonContent);
+
+        // Prepare KML content via tokml
+        const feature = {
+            type: 'Feature',
+            geometry: geometryData.geometry,
+            properties: {}
+        };
+        const kmlContent = tokml(feature);
+        folder.file(`${baseName}.kml`, kmlContent);
+
+        filesAdded += 2;
+    });
+
+    if (filesAdded === 0) {
+        alert('No geometry data available to include in ZIP');
+        return;
+    }
+
+    zip.generateAsync({ type: 'blob' }).then((content) => {
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'plots_kml_geojson.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }).catch((err) => {
+        console.error('Error generating ZIP:', err);
+        alert('Failed to generate ZIP file');
+    });
+};
+
+window.copyGeoJSON = function(geometryId) {
+    const geometryData = window.geometryData && window.geometryData[geometryId];
+    if (!geometryData || !geometryData.geojson) {
+        alert('No geometry data available');
+        return;
+    }
+    
+    const geojson = geometryData.geojson;
+    const button = event.target;
+    
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(geojson).then(() => {
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            button.style.backgroundColor = '#198754';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.backgroundColor = '#28a745';
+            }, 1500);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+            alert('Failed to copy to clipboard');
+        });
+    } else {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = geojson;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('GeoJSON copied to clipboard!');
+    }
+};
+
+// Function to clear the entire results table and map
+window.clearResultsTable = function() {
+    if (!confirm('Are you sure you want to clear all results and reset the map?')) {
+        return;
+    }
+    
+    // Clear the results div
+    $('#results').empty();
+    
+    // Clear geometry data
+    if (window.geometryData) {
+        window.geometryData = {};
+    }
+    if (window.currentGeometryIds) {
+        window.currentGeometryIds = [];
+    }
+    
+    // Hide download button container
+    $('#download-all-container').hide();
+    
+    // Clear the map
+    if (window.cadastralApp && window.cadastralApp.map) {
+        window.cadastralApp.clearMapPolygons();
+        window.cadastralApp.mapFeatures = [];
+        $('#map-container').hide();
+    }
+};
+
+// Simple helper to remove a table row when the delete icon is clicked
+window.deleteTableRow = function(buttonElement) {
+    if (!buttonElement) return;
+    let row = buttonElement.closest && buttonElement.closest('tr');
+
+    // Fallback for older browsers without closest support
+    if (!row) {
+        let el = buttonElement;
+        while (el && el.tagName !== 'TR') {
+            el = el.parentElement;
+        }
+        row = el;
+    }
+
+    if (!row) return;
+
+    // If this row is tied to a geometry on the map, remove that as well
+    const geometryId = row.getAttribute && row.getAttribute('data-geometry-id');
+    if (geometryId && window.cadastralApp && typeof window.cadastralApp.removeGeometryById === 'function') {
+        window.cadastralApp.removeGeometryById(geometryId);
+    }
+
+    if (row.parentElement) {
+        row.parentElement.removeChild(row);
+    }
+};
+
+// Initialize the app when DOM is ready and Google Maps is loaded
+function initializeApp() {
+    if (window.google && window.google.maps) {
+        // Google Maps is already loaded
+        window.cadastralApp = new CadastralDataApp();
+    } else {
+        // Wait for Google Maps to load
+        window.addEventListener('googlemapsloaded', () => {
+            window.cadastralApp = new CadastralDataApp();
+        }, { once: true });
+    }
+}
+
+// Wait for DOM to be ready before initializing
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+    // DOM is already ready
+    initializeApp();
+}

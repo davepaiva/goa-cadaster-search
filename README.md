@@ -4,6 +4,22 @@
 
 This is a simple tool that allows us to search any plot in Goa via its survey number. Implemented as discussed in the GitHub issue: [Search by revenue village, plot number #78](https://github.com/publicmap/amche-atlas/issues/78).
 
+## Setup
+
+### Google Maps API Key
+
+This project uses Google Maps (satellite view) for displaying cadastral data. To set up:
+
+1. Get a Google Maps API key from [Google Cloud Console](https://console.cloud.google.com/google/maps-apis)
+2. Copy `config.example.js` to `config.js`:
+   ```bash
+   cp config.example.js config.js
+   ```
+3. Edit `config.js` and replace `YOUR_API_KEY_HERE` with your actual API key
+4. Make sure the Maps JavaScript API is enabled in your Google Cloud project
+
+**Note:** `config.js` is gitignored and will not be committed to the repository.
+
 ## Background
 
 This demo was created to explore the feasibility of using [DuckDB](https://duckdb.org/) - an in-process analytical database - to query cadastral data efficiently in the browser. The approach was suggested as an alternative to traditional database solutions for searching plot information by revenue village and plot numbers.
