@@ -284,11 +284,16 @@
         <!-- Results -->
         <div id="loading" style="display:none;">Loading...</div>
         <div id="results"></div>
-        <div id="download-all-container" style="margin: 10px 0; display: none;">
+        <div id="download-all-container" style="margin: 10px 0; display: none; gap: 10px; align-items: center;">
             <button id="download-all"
                     onclick="window.downloadAllGeometries()"
                     style="padding: 8px 14px; font-size: 13px; background: #343a40; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
                 Download All (KML + GeoJSON)
+            </button>
+            <button id="clear-table"
+                    onclick="window.clearResultsTable()"
+                    style="padding: 8px 14px; font-size: 13px; background: #dc3545; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                Clear Table
             </button>
         </div>
         

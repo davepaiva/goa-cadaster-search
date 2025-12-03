@@ -433,7 +433,7 @@ class CadastralDataApp {
 
     async loadVillageData(villageName, surveyNo = null, subdivNo = null) {
         $('#loading').show();
-        $('#results').empty();
+        // Don't clear results - we want to append to existing data
 
         try {
             // Load village parquet file on-demand
@@ -523,46 +523,61 @@ class CadastralDataApp {
 
     displayResults(data, surveyFilter = null, subdivFilter = null) {
         if (data.length === 0) {
-            $('#results').html('<p>No data found for the selected criteria</p>');
-            $('#map-container').hide();
+            // Only show "no data" message if there's no existing table
+            if ($('#results table tbody tr').length === 0) {
+                $('#results').html('<p>No data found for the selected criteria</p>');
+                $('#map-container').hide();
+            }
             return;
         }
-
-        let filterText = '';
-        if (surveyFilter) filterText += ` (Survey: ${surveyFilter})`;
-        if (subdivFilter) filterText += ` (Subdiv: ${subdivFilter})`;
-
-        let html = `
-            <h3>Cadastral Data${filterText} (${data.length} records)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
-                💡 Click on any row to zoom to that parcel on the map<br>
-                🎨 Use the color picker to customize each polygon's color
-            </p>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Taluka</th>
-                            <th>Village</th>
-                            <th>Survey</th>
-                            <th>Subdiv</th>
-                            <th>Records</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
 
         // Initialize geometry data storage if not exists
         if (!window.geometryData) {
             window.geometryData = {};
         }
-        // Track geometry IDs for current table (for bulk download)
-        window.currentGeometryIds = [];
+        // Initialize or keep existing geometry IDs array (don't reset it!)
+        if (!window.currentGeometryIds) {
+            window.currentGeometryIds = [];
+        }
+
+        // Check if table already exists
+        const existingTable = $('#results table tbody');
+        const tableExists = existingTable.length > 0;
+
+        // If table doesn't exist, create it
+        if (!tableExists) {
+            let html = `
+                <h3>Cadastral Data (0 records)</h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    💡 Click on any row to zoom to that parcel on the map<br>
+                    🎨 Use the color picker to customize each polygon's color
+                </p>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Taluka</th>
+                                <th>Village</th>
+                                <th>Survey</th>
+                                <th>Subdiv</th>
+                                <th>Records</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            $('#results').html(html);
+        }
 
         // Collect valid GeoJSON features for the map
         const mapFeatures = [];
         let hasGeometry = false;
+
+        // Generate unique index offset based on existing geometries
+        const indexOffset = window.currentGeometryIds.length;
 
         data.forEach((row, index) => {
             let geometryDisplay = '';
@@ -571,7 +586,8 @@ class CadastralDataApp {
             let geometryId = null;
             
             if (row.geometry_geojson) {
-                geometryId = `geometry-${index}`;
+                // Use unique ID with timestamp and offset to avoid conflicts
+                geometryId = `geometry-${Date.now()}-${indexOffset + index}`;
                 
                 // Ensure we have a string to work with
                 let geometryString = '';
@@ -685,7 +701,7 @@ class CadastralDataApp {
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
             const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
-            html += `
+            const rowHtml = `
                 <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
@@ -697,44 +713,51 @@ class CadastralDataApp {
                     <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
+            
+            // Append row to existing tbody
+            $('#results table tbody').append(rowHtml);
         });
 
-        html += '</tbody></table></div>';
-        
-        $('#results').html(html);
+        // Update the record count in the header
+        const totalRecords = $('#results table tbody tr').length;
+        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
 
         // Show/hide master download button based on geometry availability
         if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
-            $('#download-all-container').show();
+            $('#download-all-container').css('display', 'flex');
         } else {
             $('#download-all-container').hide();
         }
 
-        // Update map with new data
-        this.updateMap(mapFeatures, hasGeometry);
+        // Update map with new data (append mode)
+        this.updateMap(mapFeatures, hasGeometry, true);
     }
 
-    updateMap(features, hasGeometry) {
+    updateMap(features, hasGeometry, appendMode = false) {
         if (!this.map) {
             console.warn('Map not ready yet');
             return;
         }
 
         try {
-            // Clear existing polygons
-            this.clearMapPolygons();
-
-            // Store features for other operations
-            this.mapFeatures = features;
+            // Only clear existing polygons if not in append mode
+            if (!appendMode) {
+                this.clearMapPolygons();
+                this.mapFeatures = features;
+            } else {
+                // Append new features to existing ones
+                this.mapFeatures = this.mapFeatures ? [...this.mapFeatures, ...features] : features;
+            }
 
             // Show/hide map based on whether we have geometry data
             if (hasGeometry && features.length > 0) {
                 $('#map-container').show();
                 
-                // Update map info
-                $('#map-info').text(`Showing ${features.length} cadastral parcels`);
+                // Update map info to show total features
+                const totalFeatures = this.mapFeatures ? this.mapFeatures.length : 0;
+                $('#map-info').text(`Showing ${totalFeatures} cadastral parcels`);
                 
-                // Add polygons to map
+                // Add new polygons to map
                 features.forEach((feature, index) => {
                     this.addPolygonToMap(feature, index);
                 });
@@ -743,7 +766,8 @@ class CadastralDataApp {
                 setTimeout(() => {
                     this.fitMapToBounds();
                 }, 100);
-            } else {
+            } else if (!appendMode) {
+                // Only hide map if not in append mode and no geometry
                 $('#map-container').hide();
             }
         } catch (error) {
@@ -1113,7 +1137,7 @@ Mormugao,Vasco,789,C`;
 
     async performBulkSearch(searchCriteria) {
         $('#loading').show();
-        $('#results').empty();
+        // Don't clear results - we want to append to existing data
 
         try {
             const allResults = [];
@@ -1142,7 +1166,7 @@ Mormugao,Vasco,789,C`;
             
             // Display results - pass mapFeatures so we can match geometryIds
             this.displayBulkResults(allResults, searchCriteria.length, allMapFeatures);
-            this.updateMap(allMapFeatures, hasGeometry);
+            this.updateMap(allMapFeatures, hasGeometry, true);
 
         } catch (error) {
             console.error('Error in bulk search:', error);
@@ -1275,37 +1299,53 @@ Mormugao,Vasco,789,C`;
 
     displayBulkResults(data, searchCount, mapFeatures = []) {
         if (data.length === 0) {
-            $('#results').html('<p>No data found for the search criteria</p>');
+            // Only show "no data" message if there's no existing table
+            if ($('#results table tbody tr').length === 0) {
+                $('#results').html('<p>No data found for the search criteria</p>');
+            }
             return;
         }
-
-        let html = `
-            <h3>Bulk Search Results (${data.length} records from ${searchCount} searches)</h3>
-            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
-                💡 Click on any row to zoom to that parcel on the map<br>
-                🎨 Use the color picker to customize each polygon's color
-            </p>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Taluka</th>
-                            <th>Village</th>
-                            <th>Survey</th>
-                            <th>Subdiv</th>
-                            <th>Records</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
 
         // Initialize geometry data storage if not exists
         if (!window.geometryData) {
             window.geometryData = {};
         }
-        // Track geometry IDs for current table (for bulk download)
-        window.currentGeometryIds = [];
+        // Initialize or keep existing geometry IDs array (don't reset it!)
+        if (!window.currentGeometryIds) {
+            window.currentGeometryIds = [];
+        }
+
+        // Check if table already exists
+        const existingTable = $('#results table tbody');
+        const tableExists = existingTable.length > 0;
+
+        // If table doesn't exist, create it
+        if (!tableExists) {
+            let html = `
+                <h3>Cadastral Data (0 records)</h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    💡 Click on any row to zoom to that parcel on the map<br>
+                    🎨 Use the color picker to customize each polygon's color
+                </p>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Taluka</th>
+                                <th>Village</th>
+                                <th>Survey</th>
+                                <th>Subdiv</th>
+                                <th>Records</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            $('#results').html(html);
+        }
 
         // Create a map of data rows to their corresponding mapFeatures for geometryId lookup
         const dataToFeatureMap = new Map();
@@ -1316,6 +1356,9 @@ Mormugao,Vasco,789,C`;
             }
             dataToFeatureMap.get(key).push(feature);
         });
+
+        // Generate unique index offset based on existing geometries
+        const indexOffset = window.currentGeometryIds.length;
 
         data.forEach((row, index) => {
             let geometryDisplay = '';
@@ -1441,7 +1484,7 @@ Mormugao,Vasco,789,C`;
             const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
             const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
 
-            html += `
+            const rowHtml = `
                 <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
                     onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
                     onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
@@ -1453,11 +1496,21 @@ Mormugao,Vasco,789,C`;
                     <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
                 </tr>
             `;
+            
+            // Append row to existing tbody
+            $('#results table tbody').append(rowHtml);
         });
 
-        html += '</tbody></table></div>';
+        // Update the record count in the header
+        const totalRecords = $('#results table tbody tr').length;
+        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
         
-        $('#results').html(html);
+        // Show/hide master download button based on geometry availability
+        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
+            $('#download-all-container').css('display', 'flex');
+        } else {
+            $('#download-all-container').hide();
+        }
     }
 
     // Add method to zoom to specific geometry
@@ -1685,6 +1738,34 @@ window.copyGeoJSON = function(geometryId) {
         document.execCommand('copy');
         document.body.removeChild(textarea);
         alert('GeoJSON copied to clipboard!');
+    }
+};
+
+// Function to clear the entire results table and map
+window.clearResultsTable = function() {
+    if (!confirm('Are you sure you want to clear all results and reset the map?')) {
+        return;
+    }
+    
+    // Clear the results div
+    $('#results').empty();
+    
+    // Clear geometry data
+    if (window.geometryData) {
+        window.geometryData = {};
+    }
+    if (window.currentGeometryIds) {
+        window.currentGeometryIds = [];
+    }
+    
+    // Hide download button container
+    $('#download-all-container').hide();
+    
+    // Clear the map
+    if (window.cadastralApp && window.cadastralApp.map) {
+        window.cadastralApp.clearMapPolygons();
+        window.cadastralApp.mapFeatures = [];
+        $('#map-container').hide();
     }
 };
 
