@@ -1,4 +1,5 @@
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/+esm";
+import * as turf from "https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/+esm";
 
 class CadastralDataApp {
     constructor() {
@@ -629,6 +630,22 @@ class CadastralDataApp {
                                 geometryForZoom = geojsonGeometry;
                                 
                                 // Store geometry data for button/download access
+                                let centroidData = null;
+                                try {
+                                    const centroid = turf.centroid(geojsonGeometry);
+                                    if (centroid && centroid.geometry && Array.isArray(centroid.geometry.coordinates)) {
+                                        const [centroidLng, centroidLat] = centroid.geometry.coordinates;
+                                        if (typeof centroidLat === 'number' && typeof centroidLng === 'number') {
+                                            centroidData = {
+                                                lat: centroidLat,
+                                                lng: centroidLng
+                                            };
+                                        }
+                                    }
+                                } catch (centroidError) {
+                                    console.warn('Could not calculate centroid for geometry:', centroidError);
+                                }
+
                                 const filenameParts = [
                                     safeProperties.village || 'village',
                                     safeProperties.survey || 'survey',
@@ -642,7 +659,8 @@ class CadastralDataApp {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
                                     geometry: geojsonGeometry,
                                     filename,
-                                    properties: safeProperties
+                                    properties: safeProperties,
+                                    centroid: centroidData
                                 };
                                 // Track this geometry for master download
                                 window.currentGeometryIds.push(geometryId);
@@ -671,6 +689,10 @@ class CadastralDataApp {
                             <button onclick="copyGeoJSON('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Copy GeoJSON
+                            </button>
+                            <button onclick="window.openAmcheLink('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Open in Amche
                             </button>
                             <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
                                     title="Remove this row from the table"
@@ -1420,11 +1442,28 @@ Mormugao,Vasco,789,C`;
                                     records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
                                 };
                                 
+                                let centroidData = null;
+                                try {
+                                    const centroid = turf.centroid(geojsonGeometry);
+                                    if (centroid && centroid.geometry && Array.isArray(centroid.geometry.coordinates)) {
+                                        const [centroidLng, centroidLat] = centroid.geometry.coordinates;
+                                        if (typeof centroidLat === 'number' && typeof centroidLng === 'number') {
+                                            centroidData = {
+                                                lat: centroidLat,
+                                                lng: centroidLng
+                                            };
+                                        }
+                                    }
+                                } catch (centroidError) {
+                                    console.warn('Could not calculate centroid for geometry:', centroidError);
+                                }
+
                                 window.geometryData[geometryId] = {
                                     geojson: JSON.stringify(geojsonGeometry, null, 2),
                                     geometry: geojsonGeometry,
                                     filename,
-                                    properties: safeProperties
+                                    properties: safeProperties,
+                                    centroid: centroidData
                                 };
 
                                 // Track this geometry for master download and future map updates
@@ -1454,6 +1493,10 @@ Mormugao,Vasco,789,C`;
                             <button onclick="copyGeoJSON('${geometryId}')" 
                                     style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                 Copy GeoJSON
+                            </button>
+                            <button onclick="window.openAmcheLink('${geometryId}')" 
+                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                Open in Amche
                             </button>
                             <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
                                     title="Remove this row from the table"
@@ -1739,6 +1782,27 @@ window.copyGeoJSON = function(geometryId) {
         document.body.removeChild(textarea);
         alert('GeoJSON copied to clipboard!');
     }
+};
+
+// Open selected plot in Amche.in at the polygon's centroid
+window.openAmcheLink = function(geometryId) {
+    const geometryData = window.geometryData && window.geometryData[geometryId];
+    if (!geometryData || !geometryData.centroid) {
+        alert('No center point available for this plot');
+        return;
+    }
+
+    const { lat, lng } = geometryData.centroid;
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+        alert('Invalid center point for this plot');
+        return;
+    }
+
+    const zoom = 16.44; // Match example: https://amche.in/?terrain=1.5#16.44/lat/lng
+    const latStr = lat.toFixed(6);
+    const lngStr = lng.toFixed(6);
+    const url = `https://amche.in/?layers=goa-2021-regional-plan&terrain=1.5#${zoom}/${latStr}/${lngStr}`
+    window.open(url, '_blank');
 };
 
 // Function to clear the entire results table and map
