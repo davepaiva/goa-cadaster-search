@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GeoJSON/KML Export Tool - Goa Cadastral Data</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- GeoJSON to KML converter (served locally as tokml.js; see README) -->
+    <script src="tokml.js"></script>
+    <!-- Load API key from config.js (gitignored) -->
+    <script src="config.js"></script>
+    <!-- Google Maps JavaScript API - loaded dynamically with API key -->
+    <script>
+        (function() {
+            const apiKey = window.GOOGLE_MAPS_API_KEY || 'YOUR_API_KEY_HERE';
+            if (apiKey === 'YOUR_API_KEY_HERE') {
+                console.warn('⚠️ Please set your Google Maps API key in config.js (see config.example.js for template)');
+            }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=geometry&callback=initGoogleMaps`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+            
+            // Set a global callback that will be called when Google Maps loads
+            window.initGoogleMaps = function() {
+                console.log('Google Maps API loaded');
+                window.googleMapsLoaded = true;
+                // Dispatch custom event to notify that Google Maps is ready
+                window.dispatchEvent(new Event('googlemapsloaded'));
+            };
+        })();
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #fff;
+        }
+        #app {
+            background: #fff;
+            padding: 20px;
+            margin: 0;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        h1, h3 {
+            color: #333;
+            margin-top: 0;
+        }
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .back-button {
+            padding: 10px 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .back-button:hover {
+            background: #5a6268;
+        }
+        .upload-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .upload-section h3 {
+            margin-top: 0;
+        }
+        .upload-section p {
+            margin: 5px 0 15px 0;
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+        .upload-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        #csv-upload {
+            flex-grow: 1;
+        }
+        .upload-controls button {
+            padding: 10px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+        }
+        #process-csv {
+            background: #007bff;
+            color: white;
+            border: none;
+        }
+        #process-csv:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        #download-template {
+            background: transparent;
+            color: #6c757d;
+            border: 1px solid #6c757d;
+        }
+        #download-template:hover {
+            background: #6c757d;
+            color: white;
+        }
+        #csv-status {
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .export-controls {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .export-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        #export-button {
+            padding: 12px 24px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        #export-button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        #export-button:not(:disabled):hover {
+            background: #218838;
+        }
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #f9f9f9;
+            min-width: 200px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .dropdown-content button {
+            color: black;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+            width: 100%;
+            text-align: left;
+            border: none;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .dropdown-content button:hover {
+            background-color: #f1f1f1;
+        }
+        .export-dropdown:hover .dropdown-content {
+            display: block;
+        }
+        .clear-button {
+            padding: 12px 24px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .clear-button:hover {
+            background: #c82333;
+        }
+        #map {
+            width: 100%;
+            height: 500px;
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            overflow-x: auto;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 15px;
+        }
+        .table-container table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0;
+        }
+        .table-container thead th {
+            position: sticky;
+            top: 0;
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: bold;
+            color: #495057;
+            font-size: 13px;
+        }
+        .table-container tbody td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #dee2e6;
+            vertical-align: top;
+            font-size: 13px;
+        }
+        .table-container tbody tr:hover {
+            background-color: #f5f5f5;
+        }
+        #loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 16px;
+            color: #666;
+        }
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+        }
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 12px 16px;
+            margin: 15px 0;
+            border-radius: 4px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .property-list {
+            font-size: 12px;
+            max-width: 300px;
+        }
+        .property-item {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 5px;
+            align-items: center;
+        }
+        .property-item input {
+            padding: 4px 6px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 12px;
+            background: white;
+            cursor: pointer;
+        }
+        .property-item input:focus {
+            border-color: #007bff;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+        }
+        .property-item input[list]::-webkit-calendar-picker-indicator {
+            display: none;
+        }
+        .property-item button {
+            padding: 2px 6px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .add-property-btn {
+            padding: 4px 8px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        .remove-plot-btn {
+            padding: 6px 12px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .remove-plot-btn:hover {
+            background: #c82333;
+        }
+        @media (max-width: 768px) {
+            .header-bar {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            .upload-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            #map {
+                height: 400px;
+            }
+            .table-container {
+                max-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header with back button -->
+        <div class="header-bar">
+            <h1>GeoJSON/KML Export Tool</h1>
+            <a href="index.html" class="back-button">← Back to Main App</a>
+        </div>
+        
+        <!-- Instructions -->
+        <div class="info-box">
+            <strong>How to use:</strong>
+            <ol style="margin: 8px 0 0 0; padding-left: 20px;">
+                <li>Add plots individually using dropdowns OR upload a CSV file</li>
+                <li>Add custom properties to each plot in the table</li>
+                <li>View the plots on the map - hover over them to see all properties</li>
+                <li>Export as GeoJSON or KML for use in external mapping tools like Mapbox</li>
+            </ol>
+        </div>
+        
+        <!-- Individual Plot Selection Section -->
+        <div class="upload-section">
+            <h3>Add Individual Plot</h3>
+            <p>
+                Select a plot using the dropdowns below and click "Add Plot" to add it to your collection.
+            </p>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+                <select id="taluka-dropdown" style="flex: 1 1 200px; padding: 10px; border-radius: 4px; border: 1px solid #ccc;">
+                    <option value="">Select Taluka</option>
+                </select>
+                
+                <select id="village-dropdown" disabled style="flex: 1 1 200px; padding: 10px; border-radius: 4px; border: 1px solid #ccc;">
+                    <option value="">Select Village</option>
+                </select>
+                
+                <select id="survey-dropdown" disabled style="flex: 1 1 200px; padding: 10px; border-radius: 4px; border: 1px solid #ccc;">
+                    <option value="">Select Survey No (Optional)</option>
+                </select>
+                
+                <select id="subdiv-dropdown" disabled style="flex: 1 1 200px; padding: 10px; border-radius: 4px; border: 1px solid #ccc;">
+                    <option value="">Select Subdiv (Optional)</option>
+                </select>
+                
+                <button id="add-plot-button" disabled style="padding: 10px 24px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
+                    Add Plot
+                </button>
+            </div>
+        </div>
+        
+        <!-- OR Divider -->
+        <div style="display: flex; align-items: center; margin: 20px 0; gap: 15px;">
+            <div style="flex: 1; height: 1px; background: #dee2e6;"></div>
+            <span style="color: #6c757d; font-weight: 500; font-size: 14px;">OR</span>
+            <div style="flex: 1; height: 1px; background: #dee2e6;"></div>
+        </div>
+        
+        <!-- CSV Upload Section -->
+        <div class="upload-section">
+            <h3>Upload CSV File</h3>
+            <p>
+                <strong>Required columns:</strong> taluka, village, survey, subdiv (header row required)<br>
+                <strong>Optional:</strong> Add any custom property columns (e.g., issue_type, severity, notes, etc.)<br>
+                <em>Note: Taluka and village matching is case-insensitive. All properties will be included in the export.</em>
+            </p>
+            <div class="upload-controls">
+                <input type="file" id="csv-upload" accept=".csv">
+                <button id="process-csv" disabled>
+                    Process CSV
+                </button>
+                <button id="download-template">
+                    Download Template
+                </button>
+            </div>
+            <div id="csv-status"></div>
+        </div>
+        
+        <!-- Loading indicator -->
+        <div id="loading" style="display:none;">Processing data...</div>
+        
+        <!-- Results Section -->
+        <div id="results-section" style="display:none;">
+            <div class="results-header">
+                <h3 id="results-title">Results (<span id="plot-count">0</span> plots)</h3>
+                <div class="export-controls">
+                    <div class="export-dropdown">
+                        <button id="export-button" disabled>Export as GeoJSON</button>
+                        <div class="dropdown-content">
+                            <button onclick="window.exportApp.exportGeoJSON()">Export as GeoJSON</button>
+                            <button onclick="window.exportApp.exportKML()">Export as KML</button>
+                        </div>
+                    </div>
+                    <button class="clear-button" onclick="window.exportApp.clearAll()">Clear All</button>
+                </div>
+            </div>
+            
+            <!-- Map View -->
+            <div id="map"></div>
+            
+            <!-- Results Table -->
+            <div class="table-container" id="results-table-container" style="display:none;">
+                <table>
+                    <thead>
+                        <tr id="table-header">
+                            <th>Taluka</th>
+                            <th>Village</th>
+                            <th>Survey</th>
+                            <th>Subdiv</th>
+                            <th>Properties</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-table-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="export.js"></script>
+</body>
+</html>

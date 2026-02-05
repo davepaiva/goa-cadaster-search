@@ -229,7 +229,16 @@
 </head>
 <body>
     <div id="app">
-        <h1>Goa Cadastral Data Explorer</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1 style="margin: 0;">Goa Cadastral Data Explorer</h1>
+            <button id="go-to-export" 
+                    onclick="window.location.href='export.html'"
+                    style="padding: 12px 24px; background: #28a745; color: white; 
+                           border: none; border-radius: 5px; cursor: pointer; 
+                           font-size: 16px; white-space: nowrap;">
+                🗺️ GeoJSON/KML Export Tool
+            </button>
+        </div>
         
         <!-- Bulk Search Section -->
         <div class="bulk-search-section">
