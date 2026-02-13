@@ -307,6 +307,22 @@
         .remove-plot-btn:hover {
             background: #c82333;
         }
+        .missing-geojson {
+            background-color: #fff3cd !important;
+            border-left: 4px solid #ffc107;
+        }
+        .missing-geojson:hover {
+            background-color: #ffe69c !important;
+        }
+        .warning-indicator {
+            color: #ff9800;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            margin-top: 4px;
+        }
         @media (max-width: 768px) {
             .header-bar {
                 flex-direction: column;
@@ -385,9 +401,12 @@
         <div class="upload-section">
             <h3>Upload CSV File</h3>
             <p>
-                <strong>Required columns:</strong> taluka, village, survey, subdiv (header row required)<br>
-                <strong>Optional:</strong> Add any custom property columns (e.g., issue_type, severity, notes, etc.)<br>
-                <em>Note: Taluka and village matching is case-insensitive. All properties will be included in the export.</em>
+                <strong>Required column:</strong> village (header row required)<br>
+                <strong>Optional columns:</strong> taluka (auto-detected if missing), survey, subdiv<br>
+                <strong>Survey/Subdiv format:</strong> Can be combined (e.g., "99/5-A") or separate columns<br>
+                <strong>Empty subdiv:</strong> If survey exists but subdiv is empty, ALL subdivs for that survey will be fetched<br>
+                <strong>Custom properties:</strong> You can add any extra columns for your own tracking (e.g., owner_name, remarks, status, etc.)<br>
+                <em>Note: Village matching is case-insensitive. Rows without geojson will be highlighted for review.</em>
             </p>
             <div class="upload-controls">
                 <input type="file" id="csv-upload" accept=".csv">
