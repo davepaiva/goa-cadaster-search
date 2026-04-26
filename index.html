@@ -1,324 +1,613 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Cadastral Data Viewer</title>
+    <title>Goa Cadastral Data Explorer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <!-- GeoJSON to KML converter (served locally as tokml.js; see README) -->
     <script src="tokml.js"></script>
-    <!-- JSZip for creating ZIP archives of KML + GeoJSON downloads -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <!-- Load API key from config.js (gitignored) -->
     <script src="config.js"></script>
-    <!-- Google Maps JavaScript API - loaded dynamically with API key -->
     <script>
         (function() {
             const apiKey = window.GOOGLE_MAPS_API_KEY || 'YOUR_API_KEY_HERE';
             if (apiKey === 'YOUR_API_KEY_HERE') {
-                console.warn('⚠️ Please set your Google Maps API key in config.js (see config.example.js for template)');
+                console.warn('Please set your Google Maps API key in config.js (see config.example.js for template)');
             }
             const script = document.createElement('script');
             script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=geometry&callback=initGoogleMaps`;
             script.async = true;
             script.defer = true;
             document.head.appendChild(script);
-            
-            // Set a global callback that will be called when Google Maps loads
             window.initGoogleMaps = function() {
                 console.log('Google Maps API loaded');
                 window.googleMapsLoaded = true;
-                // Dispatch custom event to notify that Google Maps is ready
                 window.dispatchEvent(new Event('googlemapsloaded'));
             };
         })();
     </script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #fff;
-        }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #fff; }
         #app {
             background: #fff;
-            padding: 20px;
+            padding: 16px;
             margin: 0;
             min-height: 100vh;
             box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
         }
-        h1, h3 {
-            color: #333;
+        h1, h3 { color: #333; margin-top: 0; }
+        .header-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e0e0e0;
         }
-        .controls {
-            margin-bottom: 20px;
+        .toolbar {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
+            align-items: center;
         }
-        .controls select, .controls button {
-            padding: 10px;
-            font-size: 14px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-            flex: 1 1 200px;
-        }
-        .controls button {
-            background: #007bff;
+        .export-dropdown { position: relative; display: inline-block; }
+        #export-button {
+            padding: 10px 18px;
+            background: #28a745;
             color: white;
             border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        #export-button:disabled { background: #ccc; cursor: not-allowed; }
+        #export-button:not(:disabled):hover { background: #218838; }
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: 100%;
+            background-color: #f9f9f9;
+            min-width: 220px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+            z-index: 20;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .dropdown-content button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 12px 16px;
+            border: none;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .dropdown-content button:hover { background: #f1f1f1; }
+        .export-dropdown:hover .dropdown-content { display: block; }
+        .btn-secondary {
+            padding: 10px 16px;
+            font-size: 14px;
+            background: #343a40;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
             cursor: pointer;
         }
-        #map {
-            width: 100%;
-            height: 500px;
-            margin-top: 20px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-        .bulk-search-section, .individual-search-section {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .bulk-search-section h3, .individual-search-section h3 {
-            margin-top: 0;
-        }
-        .bulk-search-section p {
-            margin: 5px 0 15px 0;
+        .btn-secondary:hover:not(:disabled) { background: #23272b; }
+        .btn-secondary:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-danger {
+            padding: 10px 16px;
             font-size: 14px;
-            color: #666;
+            background: #dc3545;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
         }
+        .btn-danger:hover:not(:disabled) { background: #c82333; }
+        .btn-danger:disabled { background: #ccc; cursor: not-allowed; }
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            border-radius: 4px;
+            font-size: 14px;
+            line-height: 1.55;
+            color: #333;
+        }
+        .input-section {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        .input-section h3 { margin-top: 0; }
+        .input-section p { margin: 6px 0 12px 0; font-size: 14px; color: #555; }
         .bulk-search-controls {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
         }
-        #csv-upload {
-            flex-grow: 1;
-        }
-        .bulk-search-controls button {
+        #csv-upload { flex-grow: 1; min-width: 160px; }
+        #process-csv {
             padding: 10px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
             border-radius: 4px;
             cursor: pointer;
-            transition: all 0.2s ease;
         }
-        #process-csv {
-             background: #007bff;
-             color: white;
-             border: none;
-        }
+        #process-csv:disabled { background: #ccc; cursor: not-allowed; }
         #download-template {
+            padding: 10px 16px;
             background: transparent;
             color: #6c757d;
             border: 1px solid #6c757d;
+            border-radius: 4px;
+            cursor: pointer;
         }
-        #download-template:hover {
-            background: #6c757d;
-            color: white;
-        }
-        
-        /* OR divider styling */
+        #download-template:hover { background: #6c757d; color: white; }
+        #csv-status { font-size: 12px; margin-top: 8px; }
         .or-divider {
             display: flex;
             align-items: center;
-            margin: 20px 0;
-            gap: 15px;
+            margin: 16px 0;
+            gap: 12px;
         }
-        .or-divider::before,
-        .or-divider::after {
+        .or-divider::before, .or-divider::after {
             content: '';
             flex: 1;
             height: 1px;
             background: #dee2e6;
         }
-        .or-divider span {
-            color: #6c757d;
-            font-weight: 500;
-            font-size: 14px;
-            white-space: nowrap;
+        .or-divider span { color: #6c757d; font-weight: 500; font-size: 14px; }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: stretch;
         }
-        #csv-status {
-            font-size: 12px;
-            margin-top: 10px;
-        }
-
-        .map-controls {
-            margin-top: 10px;
+        .controls select, .controls button {
             padding: 10px;
-            background: #f8f9fa;
-            border-radius: 5px;
-        }
-        .map-controls button {
-            margin: 5px;
-            padding: 5px 10px;
-            font-size: 12px;
-        }
-
-        /* Scrollable table styles */
-        .table-container {
-            max-height: 600px;
-            overflow-y: auto;
-            overflow-x: auto;
+            font-size: 14px;
+            border-radius: 4px;
             border: 1px solid #ccc;
-            border-radius: 5px;
-            margin-top: 10px;
+            flex: 1 1 180px;
         }
-        
-        .table-container table {
+        .controls button#add-plot-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            flex: 1 1 200px;
+        }
+        .controls button#add-plot-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #loading { display: none; padding: 12px; text-align: center; color: #666; }
+        .main-layout {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .view-toggle-bar {
+            display: flex;
+            border-bottom: 2px solid #dee2e6;
+            margin-bottom: 0;
+        }
+        .view-tab {
+            padding: 10px 28px;
+            font-size: 14px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            color: #666;
+            margin-bottom: -2px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .view-tab:hover { color: #333; }
+        .view-tab.active { color: #007bff; border-bottom-color: #007bff; }
+        .tab-badge {
+            display: inline-block;
+            background: #007bff;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 10px;
+            padding: 1px 7px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .view-tab:not(.active) .tab-badge { background: #adb5bd; }
+        #map-view-panel { display: flex; flex-direction: column; }
+        #map {
             width: 100%;
-            border-collapse: collapse;
-            margin: 0;
+            height: 100vh;
         }
-        
+        #table-view-panel {
+            padding: 12px 0;
+        }
+        #table-empty-state {
+            padding: 48px;
+            text-align: center;
+            color: #999;
+            font-size: 15px;
+        }
+        .table-container {
+            max-height: calc(100vh - 120px);
+            overflow: auto;
+        }
+        .table-container table { width: 100%; border-collapse: collapse; margin: 0; }
         .table-container thead th {
             position: sticky;
             top: 0;
-            background-color: #f8f9fa;
+            background: #f8f9fa;
             border-bottom: 2px solid #dee2e6;
-            padding: 12px 8px;
+            padding: 10px 8px;
             text-align: left;
             font-weight: bold;
             color: #495057;
+            font-size: 13px;
         }
-        
         .table-container tbody td {
-            padding: 8px;
+            padding: 10px 8px;
             border-bottom: 1px solid #dee2e6;
             vertical-align: top;
+            font-size: 13px;
         }
-        
-        .table-container tbody tr:hover {
-            background-color: #f5f5f5;
+        .table-container tbody tr:hover { background: #f5f5f5; }
+        .table-container tbody tr.clickable-row { cursor: pointer; }
+        .property-list { font-size: 12px; max-width: 320px; }
+        .property-item { display: flex; gap: 5px; margin-bottom: 5px; align-items: center; flex-wrap: wrap; }
+        .property-item input {
+            padding: 4px 6px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 12px;
         }
-
+        .property-item button {
+            padding: 2px 6px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .add-property-btn {
+            padding: 4px 8px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-top: 4px;
+        }
+        .remove-plot-btn {
+            padding: 6px 10px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        /* Kebab trigger */
+        .kebab-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+            padding: 2px 8px;
+            color: #555;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: -1px;
+        }
+        .kebab-btn:hover { background: #f0f0f0; color: #111; }
+        /* Actions modal */
+        #action-modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.38);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+        #action-modal-backdrop.open { display: flex; }
+        #action-modal {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.22);
+            min-width: 260px;
+            max-width: 340px;
+            width: 92%;
+            overflow: hidden;
+            animation: modalIn 0.15s ease;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.95) translateY(-8px); }
+            to   { opacity: 1; transform: scale(1)    translateY(0);    }
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 13px 16px;
+            border-bottom: 1px solid #dee2e6;
+            background: #f8f9fa;
+        }
+        .modal-title { font-weight: 700; font-size: 14px; color: #333; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .modal-close-btn {
+            background: none;
+            border: none;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            color: #888;
+            padding: 0 2px;
+            margin-left: 8px;
+            flex-shrink: 0;
+        }
+        .modal-close-btn:hover { color: #333; }
+        .modal-body { padding: 6px 0; }
+        .modal-action-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 11px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #222;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+        .modal-action-btn:hover { background: #f5f5f5; }
+        .modal-action-btn.danger { color: #dc3545; }
+        .modal-action-btn.danger:hover { background: #fff5f5; }
+        .modal-action-icon { width: 22px; text-align: center; font-size: 15px; flex-shrink: 0; }
+        .modal-color-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            font-size: 14px;
+            color: #222;
+        }
+        .modal-color-row input[type=color] {
+            width: 38px; height: 30px; padding: 0;
+            border: 1px solid #ccc; border-radius: 4px; cursor: pointer;
+        }
+        .modal-divider { height: 1px; background: #dee2e6; margin: 4px 0; }
+        .missing-geojson { background-color: #fff3cd !important; border-left: 4px solid #ffc107; }
+        .warning-indicator { color: #ff9800; font-weight: bold; font-size: 11px; margin-top: 4px; }
+        .actions-cell { max-width: 480px; }
+        .actions-cell .action-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+        .actions-cell button.mini {
+            padding: 5px 10px;
+            font-size: 11px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #fff;
+        }
         @media (max-width: 768px) {
-            #app {
-                padding: 15px;
-            }
-            .controls {
-                flex-direction: column;
-            }
-            .controls select, .controls button {
-                width: 100%;
-                box-sizing: border-box;
-                flex: 0 1 auto;
-            }
-            .bulk-search-controls {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            #map {
-                height: 400px;
-            }
-            .table-container {
-                max-height: 400px;
-            }
-            .table-container table {
-                font-size: 12px;
-            }
-            .table-container thead th {
-                padding: 8px 4px;
-            }
-            .table-container tbody td {
-                padding: 6px 4px;
-            }
+            #map { height: 100svh; }
+            .table-container { max-height: calc(100svh - 120px); }
+            .controls select, .controls button { width: 100%; box-sizing: border-box; flex: 1 1 100%; }
+            .bulk-search-controls { flex-direction: column; align-items: stretch; }
         }
     </style>
 </head>
 <body>
     <div id="app">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h1 style="margin: 0;">Goa Cadastral Data Explorer</h1>
-            <button id="go-to-export" 
-                    onclick="window.location.href='export.html'"
-                    style="padding: 12px 24px; background: #28a745; color: white; 
-                           border: none; border-radius: 5px; cursor: pointer; 
-                           font-size: 16px; white-space: nowrap;">
-                🗺️ GeoJSON/KML Export Tool
-            </button>
+        <div class="header-row">
+            <h1 style="margin:0;">Goa Cadastral Data Explorer</h1>
+            <div class="toolbar">
+                <div class="export-dropdown">
+                    <button type="button" id="export-button" disabled>Export layer</button>
+                    <div class="dropdown-content">
+                        <button type="button" onclick="window.cadastralApp.exportGeoJSON()">GeoJSON (one file)</button>
+                        <button type="button" onclick="window.cadastralApp.exportKML()">KML (one file)</button>
+                    </div>
+                </div>
+                <button type="button" class="btn-secondary" id="download-all-zip" onclick="window.downloadAllGeometries()">ZIP: one folder per plot</button>
+                <button type="button" class="btn-danger" id="clear-all-btn" disabled>Clear all</button>
+            </div>
         </div>
-        
-        <!-- Bulk Search Section -->
-        <div class="bulk-search-section">
-            <h3>Bulk Search</h3>
+
+        <div class="info-box">
+            Search plots with the dropdowns or upload a CSV. Each match is added to the map and the table below the map.
+            Use <strong>Export layer</strong> for a single GeoJSON or KML FeatureCollection including any custom properties you add in the table.
+        </div>
+
+        <div class="input-section">
+            <h3>Upload CSV</h3>
             <p>
-                Upload a CSV file to search multiple records at once. 
-                CSV should have columns: <strong>taluka, village, survey, subdiv</strong> (header row required)<br>
-                <em>Note: Taluka is required because some villages exist in multiple talukas</em>
+                Required column: <strong>village</strong>. Recommended: <strong>taluka</strong> (auto-detected if omitted for a single-taluka village file).
+                Optional: <strong>survey</strong>, <strong>subdiv</strong>. Combined survey/subdiv (e.g. 99/5-A) in the survey column is supported.
+                Any other columns are stored as custom properties. Quoted fields are supported.
             </p>
             <div class="bulk-search-controls">
                 <input type="file" id="csv-upload" accept=".csv">
-                <button id="process-csv" disabled>
-                    Process CSV
-                </button>
-                <button id="download-template">
-                    Download Template
-                </button>
+                <button type="button" id="process-csv" disabled>Process CSV</button>
+                <button type="button" id="download-template">Download template</button>
             </div>
             <div id="csv-status"></div>
-        </div>
-        
-        <!-- OR Divider -->
-        <div class="or-divider">
-            <span>OR</span>
-        </div>
-        
-        <!-- Individual Search Section -->
-        <div class="individual-search-section">
-            <h3>Individual Search</h3>
-            <!-- Dropdowns -->
+
+            <div class="or-divider"><span>or</span></div>
+
+            <h3>Select a plot</h3>
+            <p>
+                Choose taluka, village, and optional survey and subdiv, then add the match to the map and table.
+                If you pick a survey but leave subdiv empty, every subdiv for that survey is loaded.
+            </p>
             <div class="controls">
-                <select id="taluka-dropdown">
-                    <option value="">Select Taluka</option>
-                </select>
-                
-                <select id="village-dropdown" disabled>
-                    <option value="">Select Village</option>
-                </select>
-                
-                <select id="survey-dropdown" disabled>
-                    <option value="">Select Survey No (Optional)</option>
-                </select>
-                
-                <select id="subdiv-dropdown" disabled>
-                    <option value="">Select Subdiv (Optional)</option>
-                </select>
-                
-                <button id="load-data">Load Data</button>
+                <select id="taluka-dropdown"><option value="">Select Taluka</option></select>
+                <select id="village-dropdown" disabled><option value="">Select Village</option></select>
+                <select id="survey-dropdown" disabled><option value="">Select Survey No (Optional)</option></select>
+                <select id="subdiv-dropdown" disabled><option value="">Select Subdiv (Optional)</option></select>
+                <button type="button" id="add-plot-button" disabled>Add to map and table</button>
             </div>
         </div>
-        
-        <!-- Results -->
-        <div id="loading" style="display:none;">Loading...</div>
-        <div id="results"></div>
-        <div id="download-all-container" style="margin: 10px 0; display: none; gap: 10px; align-items: center;">
-            <button id="download-all"
-                    onclick="window.downloadAllGeometries()"
-                    style="padding: 8px 14px; font-size: 13px; background: #343a40; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
-                Download All (KML + GeoJSON)
-            </button>
-            <button id="clear-table"
-                    onclick="window.clearResultsTable()"
-                    style="padding: 8px 14px; font-size: 13px; background: #dc3545; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
-                Clear Table
-            </button>
-        </div>
-        
-        <!-- Map -->
-        <div id="map-container" style="display:none;">
-            <h3>Map View</h3>
-            <!-- <div class="map-controls">
-                <button id="fit-bounds">Fit to Data</button>
-                <button id="toggle-labels">Toggle Labels</button>
-                <button id="clear-map">Clear Map</button>
-                <span id="map-info" style="margin-left: 15px; font-size: 12px; color: #666;"></span>
-            </div> -->
-            <div id="map"></div>
+
+        <div id="loading">Loading…</div>
+
+        <div class="main-layout">
+            <!-- View toggle tabs -->
+            <div class="view-toggle-bar">
+                <button class="view-tab active" id="tab-map" onclick="window.switchView('map')">Map</button>
+                <button class="view-tab" id="tab-table" onclick="window.switchView('table')">Table <span class="tab-badge" id="plot-count">0</span></button>
+            </div>
+
+            <!-- Map panel -->
+            <div id="map-view-panel">
+                <div id="map"></div>
+            </div>
+
+            <!-- Table panel -->
+            <div id="table-view-panel" style="display:none;">
+                <div id="results-section" style="display:none;">
+                    <div class="table-container" id="results-table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Taluka</th>
+                                    <th>Village</th>
+                                    <th>Survey</th>
+                                    <th>Subdiv</th>
+                                    <th>Properties</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="results-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id="table-empty-state">No plots added yet — search above and add plots to see them here.</div>
+            </div>
         </div>
     </div>
 
+    <!-- Actions modal -->
+    <div id="action-modal-backdrop" onclick="window.closeActionsModal()">
+        <div id="action-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span class="modal-title" id="action-modal-title">Actions</span>
+                <button class="modal-close-btn" onclick="window.closeActionsModal()" title="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="action-modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        window.switchView = function(view) {
+            const mapPanel = document.getElementById('map-view-panel');
+            const tablePanel = document.getElementById('table-view-panel');
+            const tabMap = document.getElementById('tab-map');
+            const tabTable = document.getElementById('tab-table');
+            if (view === 'map') {
+                mapPanel.style.display = '';
+                tablePanel.style.display = 'none';
+                tabMap.classList.add('active');
+                tabTable.classList.remove('active');
+                // Trigger Google Maps resize so tiles render correctly
+                if (window.cadastralApp && window.cadastralApp.map) {
+                    google.maps.event.trigger(window.cadastralApp.map, 'resize');
+                }
+            } else {
+                mapPanel.style.display = 'none';
+                tablePanel.style.display = '';
+                tabMap.classList.remove('active');
+                tabTable.classList.add('active');
+                // Show/hide empty state
+                const hasResults = document.getElementById('results-section').style.display !== 'none';
+                document.getElementById('table-empty-state').style.display = hasResults ? 'none' : '';
+            }
+        };
+
+        window.openActionsModal = function(plotId) {
+            const app = window.cadastralApp;
+            const feature = app && app.features.find(f => f.properties._plotId === plotId);
+            if (!feature) return;
+            const props = feature.properties;
+            const hasGeom = !!(feature.geometry && feature.geometry.coordinates);
+            const colorVal = props._polygonColor || '#007cba';
+
+            // Title: village + survey/subdiv
+            const surveyLabel = props.survey ? props.survey + (props.subdiv ? '/' + props.subdiv : '') : 'All surveys';
+            document.getElementById('action-modal-title').textContent = props.village + ' \u2013 ' + surveyLabel;
+
+            let html = '';
+            if (hasGeom) {
+                html += `<div class="modal-color-row">
+                    <span class="modal-action-icon">&#9679;</span>
+                    <span style="flex:1;">Polygon color</span>
+                    <input type="color" value="${colorVal}"
+                        onchange="window.cadastralApp.changePolygonColor('${plotId}', this.value)"
+                        onclick="event.stopPropagation();">
+                </div>
+                <div class="modal-divider"></div>
+                <button class="modal-action-btn" onclick="copyKML('${plotId}');window.closeActionsModal()">
+                    <span class="modal-action-icon">&#128196;</span>Download KML
+                </button>
+                <button class="modal-action-btn" id="modal-copy-geojson-btn"
+                    onclick="window._modalCopyGeoJSON('${plotId}')">
+                    <span class="modal-action-icon">&#128203;</span>Copy GeoJSON
+                </button>
+                <button class="modal-action-btn" onclick="openAmcheLink('${plotId}');window.closeActionsModal()">
+                    <span class="modal-action-icon">&#128279;</span>Open Amche link
+                </button>
+                <div class="modal-divider"></div>`;
+            }
+            html += `<button class="modal-action-btn danger" onclick="window.cadastralApp.removePlot('${plotId}');window.closeActionsModal()">
+                <span class="modal-action-icon">&#128465;</span>Remove plot
+            </button>`;
+
+            document.getElementById('action-modal-body').innerHTML = html;
+            document.getElementById('action-modal-backdrop').classList.add('open');
+        };
+
+        window._modalCopyGeoJSON = function(plotId) {
+            const btn = document.getElementById('modal-copy-geojson-btn');
+            const labelSpan = btn ? btn.querySelector('span:last-child') : null;
+            let _txt = labelSpan ? labelSpan.textContent : 'Copy GeoJSON';
+            window.copyGeoJSON(plotId, {
+                get textContent() { return _txt; },
+                set textContent(v) {
+                    _txt = v;
+                    if (labelSpan) labelSpan.textContent = v || 'Copy GeoJSON';
+                    if (v === 'Copied!') setTimeout(() => window.closeActionsModal(), 1200);
+                }
+            });
+        };
+
+        window.closeActionsModal = function() {
+            document.getElementById('action-modal-backdrop').classList.remove('open');
+        };
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') window.closeActionsModal();
+        });
+    </script>
     <script type="module" src="app.js"></script>
 </body>
 </html>

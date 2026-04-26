@@ -4,15 +4,16 @@ import * as turf from "https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/+esm";
 class CadastralDataApp {
     constructor() {
         this.db = null;
-        this.loadedFiles = new Set(); // Track loaded files
-        this.currentData = null; // Store current query results
-        this.currentFilters = {}; // Store current filters
-        this.viewMode = 'summary'; // 'summary' or 'detailed'
-        this.map = null; // Google Maps instance
-        this.mapFeatures = []; // Store current map features
-        this.mapPolygons = []; // Store Google Maps polygon objects
-        this.mapInfoWindows = []; // Store info windows
-        this.polygonColorMap = {}; // Map geometry ID to polygon object and color
+        this.loadedFiles = new Set();
+        this.map = null;
+        this.mapPolygons = [];
+        this.mapInfoWindows = [];
+        this.features = [];
+        this.customProperties = [];
+        this.plotIdCounter = 0;
+        this.usedKeys = new Set();
+        this.usedValues = new Set();
+        this.rowsWithMissingGeojson = [];
         this.init();
     }
 
@@ -59,6 +60,7 @@ class CadastralDataApp {
             // Load initial dropdown data
             await this.loadDropdownData();
             this.setupEventListeners();
+            this.updateExportControls();
             
             // Hide main loading indicator
             $('#loading').hide();
@@ -111,6 +113,12 @@ class CadastralDataApp {
         }
     }
 
+    /** DuckDB identifiers cannot contain hyphens; keep letters, digits, underscore only. */
+    villageTableName(villageName) {
+        const suffix = String(villageName).replace(/[^a-zA-Z0-9_]/g, '_');
+        return `village_${suffix}`;
+    }
+
     async loadParquetFile(filename, tableName) {
         if (this.loadedFiles.has(tableName)) {
             console.log(`${tableName} already loaded, skipping`);
@@ -121,22 +129,23 @@ class CadastralDataApp {
         const connection = await this.db.connect();
         
         try {
+            const encodedFilename = encodeURIComponent(filename);
             // Try multiple URL strategies for GitHub Pages compatibility
             const urlStrategies = [
                 // Strategy 1: Current approach
                 () => {
                     const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
-                    return `${baseUrl}/data/${filename}`;
+                    return `${baseUrl}/data/${encodedFilename}`;
                 },
                 // Strategy 2: Direct relative path (for GitHub Pages root deployment)
-                () => `./data/${filename}`,
+                () => `./data/${encodedFilename}`,
                 // Strategy 3: Absolute path from root
-                () => `${window.location.origin}${window.location.pathname.split('/').slice(0, -1).join('/')}/data/${filename}`,
+                () => `${window.location.origin}${window.location.pathname.split('/').slice(0, -1).join('/')}/data/${encodedFilename}`,
                 // Strategy 4: Using repo name if available
                 () => {
                     const pathParts = window.location.pathname.split('/').filter(p => p);
                     if (pathParts.length > 0) {
-                        return `${window.location.origin}/${pathParts[0]}/data/${filename}`;
+                        return `${window.location.origin}/${pathParts[0]}/data/${encodedFilename}`;
                     }
                     return null;
                 }
@@ -151,23 +160,32 @@ class CadastralDataApp {
                 console.log(`Trying strategy ${i + 1}: ${fileUrl}`);
                 
                 try {
-                    // First, let's verify the URL is accessible
-                    const response = await fetch(fileUrl, { method: 'HEAD' });
-                    console.log(`File check for ${filename}: Status ${response.status}, Content-Length: ${response.headers.get('content-length')}, Content-Type: ${response.headers.get('content-type')}`);
-                    
-                    if (!response.ok) {
-                        throw new Error(`File not accessible: HTTP ${response.status} ${response.statusText}`);
+                    // HEAD can fail (405/500) on some static servers while GET (used by DuckDB) still works.
+                    try {
+                        const response = await fetch(fileUrl, { method: 'HEAD' });
+                        console.log(`File check for ${filename}: Status ${response.status}, Content-Length: ${response.headers.get('content-length')}, Content-Type: ${response.headers.get('content-type')}`);
+
+                        if (response.ok) {
+                            const contentLength = response.headers.get('content-length');
+                            if (contentLength === '0' || contentLength === null) {
+                                console.warn(`Warning: File ${filename} appears to be empty or content-length not set`);
+                            }
+                        } else if (response.status === 404 || response.status === 403) {
+                            throw new Error(`File not accessible: HTTP ${response.status} ${response.statusText}`);
+                        } else {
+                            console.warn(`HEAD returned HTTP ${response.status}; continuing with read_parquet (GET may still succeed).`);
+                        }
+                    } catch (headError) {
+                        if (headError.message && headError.message.includes('File not accessible')) {
+                            throw headError;
+                        }
+                        console.warn(`HEAD failed for ${fileUrl}:`, headError.message, '- trying read_parquet anyway.');
                     }
-                    
-                    const contentLength = response.headers.get('content-length');
-                    if (contentLength === '0' || contentLength === null) {
-                        console.warn(`Warning: File ${filename} appears to be empty or content-length not set`);
-                    }
-                    
-                    // Try to load with DuckDB
+
+                    const escapedUrl = fileUrl.replace(/'/g, "''");
                     await connection.query(`
                         CREATE TABLE ${tableName} AS 
-                        SELECT * FROM read_parquet('${fileUrl}')
+                        SELECT * FROM read_parquet('${escapedUrl}')
                     `);
                     
                     this.loadedFiles.add(tableName);
@@ -332,9 +350,8 @@ class CadastralDataApp {
         
         try {
             // Load village parquet file if not already loaded
-            const safeVillageName = villageName.replace(/[^a-zA-Z0-9-_]/g, '_');
-            const tableName = `village_${safeVillageName}`;
-            
+            const tableName = this.villageTableName(villageName);
+
             if (!this.loadedFiles.has(tableName)) {
                 await this.loadParquetFile(`${villageName}.parquet`, tableName);
             }
@@ -381,9 +398,8 @@ class CadastralDataApp {
         console.log('Populating subdiv dropdown for village:', villageName, 'survey:', surveyNo);
         
         try {
-            const safeVillageName = villageName.replace(/[^a-zA-Z0-9-_]/g, '_');
-            const tableName = `village_${safeVillageName}`;
-            
+            const tableName = this.villageTableName(villageName);
+
             const connection = await this.db.connect();
             
             try {
@@ -432,518 +448,644 @@ class CadastralDataApp {
         }
     }
 
-    async loadVillageData(villageName, surveyNo = null, subdivNo = null) {
-        $('#loading').show();
-        // Don't clear results - we want to append to existing data
+    clearMapPolygons() {
+        this.mapPolygons.forEach(polygon => polygon.setMap(null));
+        this.mapPolygons = [];
+        this.mapInfoWindows.forEach(iw => iw.close());
+        this.mapInfoWindows = [];
+    }
 
+    countFeaturesWithGeometry() {
+        return this.features.filter(f => f.geometry && f.geometry !== null).length;
+    }
+
+    updateExportControls() {
+        const n = this.countFeaturesWithGeometry();
+        const anyFeatures = this.features.length > 0;
+        $('#export-button').prop('disabled', n === 0);
+        $('#download-all-zip').prop('disabled', n === 0);
+        $('#clear-all-btn').prop('disabled', !anyFeatures);
+    }
+
+    refreshAfterFeatureChange() {
+        this.displayResults();
         try {
-            // Load village parquet file on-demand
-            const safeVillageName = villageName.replace(/[^a-zA-Z0-9-_]/g, '_');
-            const tableName = `village_${safeVillageName}`;
-            
-            if (!this.loadedFiles.has(tableName)) {
-                await this.loadParquetFile(`${villageName}.parquet`, tableName);
-            }
+            this.displayOnMap();
+        } catch (e) {
+            console.warn('Map refresh:', e);
+        }
+        this.updateExportControls();
+        $('#plot-count').text(String(this.features.length));
+        if (this.features.length === 0) {
+            $('#results-section').hide();
+            $('#table-empty-state').show();
+        } else {
+            $('#results-section').show();
+            $('#table-empty-state').hide();
+        }
+    }
 
-            // Query the village data with optional filters
-            const connection = await this.db.connect();
-            
-            try {
-                let whereClause = '';
-                let filters = [];
-                
-                if (surveyNo) {
-                    const escapedSurvey = surveyNo.replace(/'/g, "''");
-                    filters.push(`survey = '${escapedSurvey}'`);
-                }
-                
-                if (subdivNo) {
-                    const escapedSubdiv = subdivNo.replace(/'/g, "''");
-                    filters.push(`subdiv = '${escapedSubdiv}'`);
-                }
-                
-                if (filters.length > 0) {
-                    whereClause = 'WHERE ' + filters.join(' AND ');
-                }
-                
-                // Use spatial functions if available, otherwise show info message
-                let result;
-                if (this.spatialEnabled) {
-                    try {
-                        result = await connection.query(`
-                            SELECT taluka, village, survey, subdiv, 
-                                   ST_AsGeoJSON(ST_GeomFromWKB(geometry)) as geometry_geojson,
-                                   COUNT(*) as record_count
-                            FROM ${tableName}
-                            ${whereClause}
-                            GROUP BY taluka, village, survey, subdiv, geometry
-                            ORDER BY survey, subdiv
-                            LIMIT 100
-                        `);
-                        console.log('Successfully used ST_AsGeoJSON with WKB conversion');
-                    } catch (spatialError) {
-                        console.warn('ST_AsGeoJSON failed despite spatial being enabled:', spatialError.message);
-                        this.spatialEnabled = false; // Disable for future queries
-                        // Fallback to info message without using geometry column
-                        result = await connection.query(`
-                            SELECT taluka, village, survey, subdiv, 
-                                   'WKB Binary Geometry Data (Spatial functions failed)' as geometry_geojson,
-                                   COUNT(*) as record_count
-                            FROM ${tableName}
-                            ${whereClause}
-                            GROUP BY taluka, village, survey, subdiv
-                            ORDER BY survey, subdiv
-                            LIMIT 100
-                        `);
-                    }
-                } else {
-                    // Spatial not available, show info message without using geometry column
-                    result = await connection.query(`
-                        SELECT taluka, village, survey, subdiv, 
-                               'WKB Binary Geometry Data (Spatial extension not available in DuckDB WASM)' as geometry_geojson,
-                               COUNT(*) as record_count
-                        FROM ${tableName}
-                        ${whereClause}
-                        GROUP BY taluka, village, survey, subdiv
-                        ORDER BY survey, subdiv
-                        LIMIT 100
-                    `);
-                }
-                
-                this.displayResults(result.toArray(), surveyNo, subdivNo);
-            } finally {
-                await connection.close();
+    changePolygonColor(plotId, newColor) {
+        const f = this.features.find(x => x.properties._plotId === plotId);
+        if (f && f.properties) {
+            f.properties._polygonColor = newColor;
+            this.displayOnMap();
+        }
+    }
+
+    readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsText(file);
+        });
+    }
+
+    parseCsvLine(line) {
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                values.push(current.trim());
+                current = '';
+            } else {
+                current += char;
             }
+        }
+        values.push(current.trim());
+        return values;
+    }
+
+    parseCsv(csvText) {
+        const lines = csvText.trim().split('\n');
+        if (lines.length < 2) {
+            throw new Error('CSV must have at least a header row and one data row');
+        }
+        const headers = lines[0].split(',').map(h => h.trim());
+        const lowerHeaders = headers.map(h => h.toLowerCase());
+        const talukaIndex = lowerHeaders.indexOf('taluka');
+        const villageIndex = lowerHeaders.indexOf('village');
+        const surveyIndex = lowerHeaders.indexOf('survey');
+        const subdivIndex = lowerHeaders.indexOf('subdiv');
+        if (villageIndex === -1) {
+            throw new Error('CSV must have a "village" column');
+        }
+        const standardIndices = [talukaIndex, villageIndex, surveyIndex, subdivIndex].filter(i => i !== -1);
+        const customPropertyIndices = headers.map((h, i) => i).filter(i => !standardIndices.includes(i));
+        const customProperties = customPropertyIndices.map(i => headers[i]);
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const values = this.parseCsvLine(line);
+            if (values.length >= headers.length && values[villageIndex]) {
+                let survey = surveyIndex !== -1 ? values[surveyIndex] : null;
+                let subdiv = subdivIndex !== -1 ? values[subdivIndex] : null;
+                let originalSurvey = survey;
+                if (survey && survey.includes('/')) {
+                    const hasExplicitSubdiv = subdivIndex !== -1 && subdiv && subdiv.trim() !== '';
+                    if (!hasExplicitSubdiv) {
+                        const parts = survey.split('/');
+                        survey = parts[0].trim();
+                        subdiv = parts.length > 1 ? parts[1].trim() : '';
+                    }
+                }
+                if (survey !== null && survey.trim() === '') survey = null;
+                if (subdiv !== null && subdiv.trim() === '') subdiv = null;
+                const rowData = {
+                    taluka: talukaIndex !== -1 ? values[talukaIndex] : null,
+                    village: values[villageIndex],
+                    survey,
+                    subdiv,
+                    _originalSurvey: originalSurvey,
+                    customProperties: {},
+                    _csvRowIndex: i
+                };
+                customPropertyIndices.forEach(index => {
+                    rowData.customProperties[headers[index]] = values[index] || '';
+                });
+                rows.push(rowData);
+            }
+        }
+        return { rows, customProperties };
+    }
+
+    async searchSingleRow(row) {
+        const tableName = this.villageTableName(row.village);
+        if (!this.loadedFiles.has(tableName)) {
+            await this.loadParquetFile(`${row.village}.parquet`, tableName);
+        }
+        const connection = await this.db.connect();
+        try {
+            if (!row.taluka) {
+                try {
+                    const talukaResult = await connection.query(`SELECT DISTINCT taluka FROM ${tableName} LIMIT 1`);
+                    const talukaData = talukaResult.toArray();
+                    if (talukaData.length > 0 && talukaData[0].taluka) {
+                        row.taluka = talukaData[0].taluka;
+                    }
+                } catch (e) {
+                    console.warn('Could not auto-detect taluka:', e);
+                }
+            }
+            const originalSurvey = row._originalSurvey || row.survey;
+            let filters = [];
+            if (row.taluka) {
+                const escapedTaluka = row.taluka.replace(/'/g, "''");
+                filters.push(`LOWER(taluka) = LOWER('${escapedTaluka}')`);
+            }
+            if (row.survey) {
+                const escapedSurvey = row.survey.replace(/'/g, "''");
+                filters.push(`survey = '${escapedSurvey}'`);
+            }
+            if (row.subdiv !== null && row.subdiv !== undefined && row.subdiv !== '') {
+                const escapedSubdiv = row.subdiv.replace(/'/g, "''");
+                filters.push(`subdiv = '${escapedSubdiv}'`);
+            }
+            const whereClause = filters.length > 0 ? 'WHERE ' + filters.join(' AND ') : '';
+            let result;
+            let sqlQuery = '';
+            if (this.spatialEnabled) {
+                try {
+                    sqlQuery = `SELECT taluka, village, survey, subdiv, ST_AsGeoJSON(ST_GeomFromWKB(geometry)) as geometry_geojson FROM ${tableName} ${whereClause} LIMIT 100`;
+                    result = await connection.query(sqlQuery);
+                } catch (spatialError) {
+                    console.error('Spatial query failed:', spatialError);
+                    return [];
+                }
+            } else {
+                return [];
+            }
+            let data = result.toArray();
+            if (data.length === 0 && originalSurvey && originalSurvey.includes('/') && row.survey !== originalSurvey) {
+                let combinedFilters = [];
+                if (row.taluka) {
+                    const escapedTaluka = row.taluka.replace(/'/g, "''");
+                    combinedFilters.push(`LOWER(taluka) = LOWER('${escapedTaluka}')`);
+                }
+                const escapedOriginalSurvey = originalSurvey.replace(/'/g, "''");
+                combinedFilters.push(`survey = '${escapedOriginalSurvey}'`);
+                const combinedWhere = combinedFilters.length > 0 ? 'WHERE ' + combinedFilters.join(' AND ') : '';
+                const combinedSql = `SELECT taluka, village, survey, subdiv, ST_AsGeoJSON(ST_GeomFromWKB(geometry)) as geometry_geojson FROM ${tableName} ${combinedWhere} LIMIT 100`;
+                try {
+                    result = await connection.query(combinedSql);
+                    data = result.toArray();
+                } catch (e) {
+                    console.error('Combined format query failed:', e);
+                }
+            }
+            return this.processQueryResults(data, row);
+        } finally {
+            await connection.close();
+        }
+    }
+
+    processQueryResults(data, row) {
+        const features = [];
+        data.forEach((dbRow) => {
+            if (!dbRow.geometry_geojson) return;
+            try {
+                const geometryString = typeof dbRow.geometry_geojson === 'string'
+                    ? dbRow.geometry_geojson
+                    : JSON.stringify(dbRow.geometry_geojson);
+                const geojsonGeometry = JSON.parse(geometryString);
+                if (geojsonGeometry && geojsonGeometry.type) {
+                    const properties = {
+                        taluka: String(dbRow.taluka || ''),
+                        village: String(dbRow.village || ''),
+                        survey: String(dbRow.survey || ''),
+                        subdiv: String(dbRow.subdiv || ''),
+                        _plotId: `plot_${this.plotIdCounter++}`,
+                        _polygonColor: '#007cba',
+                        ...(row.customProperties || {})
+                    };
+                    features.push({
+                        type: 'Feature',
+                        geometry: geojsonGeometry,
+                        properties
+                    });
+                }
+            } catch (parseError) {
+                console.warn('Could not parse geometry:', parseError);
+            }
+        });
+        return features;
+    }
+
+    async searchAndDisplay(rows, append) {
+        if (!append) {
+            this.features = [];
+            this.rowsWithMissingGeojson = [];
+            this.plotIdCounter = 0;
+        }
+        const missingBefore = this.rowsWithMissingGeojson.length;
+        let totalPlotsFound = 0;
+        for (const row of rows) {
+            try {
+                const results = await this.searchSingleRow(row);
+                if (results.length > 0) {
+                    results.forEach(r => this.features.push(r));
+                    totalPlotsFound += results.length;
+                } else {
+                    const missingFeature = {
+                        type: 'Feature',
+                        geometry: null,
+                        properties: {
+                            taluka: row.taluka || 'Unknown',
+                            village: row.village,
+                            survey: row.survey || '-',
+                            subdiv: row.subdiv || 'All',
+                            _plotId: `plot_${this.plotIdCounter++}`,
+                            _polygonColor: '#007cba',
+                            _missingGeojson: true,
+                            _csvRowIndex: row._csvRowIndex,
+                            ...(row.customProperties || {})
+                        }
+                    };
+                    this.features.push(missingFeature);
+                    this.rowsWithMissingGeojson.push(missingFeature);
+                }
+            } catch (error) {
+                const errorFeature = {
+                    type: 'Feature',
+                    geometry: null,
+                    properties: {
+                        taluka: row.taluka || 'Unknown',
+                        village: row.village,
+                        survey: row.survey || '-',
+                        subdiv: row.subdiv || 'All',
+                        _plotId: `plot_${this.plotIdCounter++}`,
+                        _polygonColor: '#007cba',
+                        _missingGeojson: true,
+                        _error: error.message,
+                        _csvRowIndex: row._csvRowIndex,
+                        ...(row.customProperties || {})
+                    }
+                };
+                this.features.push(errorFeature);
+                this.rowsWithMissingGeojson.push(errorFeature);
+            }
+        }
+        const newMissing = this.rowsWithMissingGeojson.length - missingBefore;
+        if (this.features.length === 0) {
+            $('#csv-status').html('<span style="color:#dc3545;">No data to display</span>');
+            alert('No data to display. Please check your CSV data.');
+            return;
+        }
+        let statusMessage = `<span style="color:#28a745;">✓ Added ${totalPlotsFound} plot(s) from ${rows.length} CSV row(s)</span>`;
+        if (newMissing > 0) {
+            statusMessage += ` <span style="color:#ff9800;">⚠ ${newMissing} row(s) with no geometry</span>`;
+        }
+        $('#csv-status').html(statusMessage);
+        this.refreshAfterFeatureChange();
+    }
+
+    async addPlotFromDropdowns() {
+        const taluka = $('#taluka-dropdown').val();
+        const village = $('#village-dropdown').val();
+        let survey = $('#survey-dropdown').val();
+        let subdiv = $('#subdiv-dropdown').val();
+        if (!village) {
+            alert('Please select a village first');
+            return;
+        }
+        if (!survey || survey.trim() === '') survey = null;
+        if (!subdiv || subdiv.trim() === '') subdiv = null;
+        $('#loading').show();
+        try {
+            const rowData = {
+                taluka: taluka || null,
+                village,
+                survey,
+                subdiv,
+                customProperties: {}
+            };
+            const results = await this.searchSingleRow(rowData);
+            if (results.length === 0) {
+                const missingFeature = {
+                    type: 'Feature',
+                    geometry: null,
+                    properties: {
+                        taluka: rowData.taluka || 'Unknown',
+                        village: rowData.village,
+                        survey: rowData.survey || '-',
+                        subdiv: rowData.subdiv || '-',
+                        _plotId: `plot_${this.plotIdCounter++}`,
+                        _polygonColor: '#007cba',
+                        _missingGeojson: true
+                    }
+                };
+                this.features.push(missingFeature);
+                this.rowsWithMissingGeojson.push(missingFeature);
+                $('#csv-status').html('<span style="color:#ff9800;">No geometry found — row added for review</span>');
+            } else {
+                results.forEach(r => this.features.push(r));
+                $('#csv-status').html(`<span style="color:#28a745;">✓ Added ${results.length} plot(s)</span>`);
+            }
+            this.refreshAfterFeatureChange();
         } catch (error) {
-            console.error('Error loading village data:', error);
-            $('#results').html(`<p>Error loading data: ${error.message}</p>`);
+            console.error(error);
+            alert('Error adding plot: ' + error.message);
         } finally {
             $('#loading').hide();
         }
     }
 
-    displayResults(data, surveyFilter = null, subdivFilter = null) {
-        if (data.length === 0) {
-            // Only show "no data" message if there's no existing table
-            if ($('#results table tbody tr').length === 0) {
-                $('#results').html('<p>No data found for the selected criteria</p>');
-                $('#map-container').hide();
+    collectUsedKeysAndValues() {
+        this.usedKeys.clear();
+        this.usedValues.clear();
+        const standardProps = ['taluka', 'village', 'survey', 'subdiv', '_plotId', '_polygonColor', '_missingGeojson', '_error', '_csvRowIndex'];
+        this.features.forEach(feature => {
+            Object.keys(feature.properties).forEach(key => {
+                if (!standardProps.includes(key)) {
+                    this.usedKeys.add(key);
+                    const value = feature.properties[key];
+                    if (value) this.usedValues.add(String(value));
+                }
+            });
+        });
+    }
+
+    updateDataLists() {
+        $('#keys-datalist').remove();
+        $('#values-datalist').remove();
+        let keysDatalist = '<datalist id="keys-datalist">';
+        this.usedKeys.forEach(key => { keysDatalist += `<option value="${key.replace(/"/g, '&quot;')}">`; });
+        keysDatalist += '</datalist>';
+        let valuesDatalist = '<datalist id="values-datalist">';
+        this.usedValues.forEach(value => { valuesDatalist += `<option value="${String(value).replace(/"/g, '&quot;')}">`; });
+        valuesDatalist += '</datalist>';
+        $('body').append(keysDatalist);
+        $('body').append(valuesDatalist);
+    }
+
+    escapeAttr(s) {
+        return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    displayResults() {
+        this.collectUsedKeysAndValues();
+        const tbody = $('#results-table-body');
+        tbody.empty();
+        this.updateDataLists();
+        const internalForProps = ['taluka', 'village', 'survey', 'subdiv', '_plotId', '_polygonColor', '_missingGeojson', '_error', '_csvRowIndex'];
+        this.features.forEach((feature) => {
+            const props = feature.properties;
+            const plotId = props._plotId;
+            const hasMissing = props._missingGeojson === true;
+            const hasGeom = !!(feature.geometry && feature.geometry !== null);
+            const customKeys = Object.keys(props).filter(k => !internalForProps.includes(k));
+            let propertyHtml = '<div class="property-list" id="property-list-' + plotId + '" onclick="event.stopPropagation()">';
+            customKeys.forEach(key => {
+                const ek = this.escapeAttr(key);
+                const ev = this.escapeAttr(props[key]);
+                propertyHtml += `
+                    <div class="property-item">
+                        <input type="text" list="keys-datalist" value="${String(key).replace(/"/g, '&quot;')}" placeholder="Key"
+                            onchange="window.cadastralApp.updatePropertyKey('${plotId}', '${ek}', this.value)" style="width:100px;">
+                        <input type="text" list="values-datalist" value="${String(props[key] || '').replace(/"/g, '&quot;')}" placeholder="Value"
+                            onchange="window.cadastralApp.updatePropertyValue('${plotId}', '${ek}', this.value)" style="width:120px;">
+                        <button type="button" onclick="window.cadastralApp.removeProperty('${plotId}', '${ek}')">×</button>
+                    </div>`;
+            });
+            propertyHtml += `<button type="button" class="add-property-btn" onclick="window.cadastralApp.addProperty('${plotId}')">+ Add property</button></div>`;
+            let warningHtml = '';
+            if (hasMissing) {
+                warningHtml = '<div class="warning-indicator">No map data</div>';
             }
-            return;
-        }
+            const rowClass = (hasMissing ? 'missing-geojson ' : '') + (hasGeom ? 'clickable-row' : '');
+            const zoomAttr = hasGeom ? `onclick="window.cadastralApp.zoomToPlot('${plotId}')"` : '';
+            const actionsHtml = `<button type="button" class="kebab-btn" title="Actions" onclick="event.stopPropagation();window.openActionsModal('${plotId}')">&#8942;</button>`;
+            tbody.append(`
+                <tr class="${rowClass}" ${zoomAttr}>
+                    <td>${props.taluka}${hasMissing ? '<br>' + warningHtml : ''}</td>
+                    <td>${props.village}</td>
+                    <td>${props.survey || '-'}</td>
+                    <td>${props.subdiv || '-'}</td>
+                    <td>${propertyHtml}</td>
+                    <td>${actionsHtml}</td>
+                </tr>`);
+        });
+        $('#results-table-container').show();
+    }
 
-        // Initialize geometry data storage if not exists
-        if (!window.geometryData) {
-            window.geometryData = {};
-        }
-        // Initialize or keep existing geometry IDs array (don't reset it!)
-        if (!window.currentGeometryIds) {
-            window.currentGeometryIds = [];
-        }
-
-        // Check if table already exists
-        const existingTable = $('#results table tbody');
-        const tableExists = existingTable.length > 0;
-
-        // If table doesn't exist, create it
-        if (!tableExists) {
-            let html = `
-                <h3>Cadastral Data (0 records)</h3>
-                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
-                    💡 Click on any row to zoom to that parcel on the map<br>
-                    🎨 Use the color picker to customize each polygon's color
-                </p>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Taluka</th>
-                                <th>Village</th>
-                                <th>Survey</th>
-                                <th>Subdiv</th>
-                                <th>Records</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            $('#results').html(html);
-        }
-
-        // Collect valid GeoJSON features for the map
-        const mapFeatures = [];
-        let hasGeometry = false;
-
-        // Generate unique index offset based on existing geometries
-        const indexOffset = window.currentGeometryIds.length;
-
-        data.forEach((row, index) => {
-            let geometryDisplay = '';
-            let hasValidGeometry = false;
-            let geometryForZoom = null;
-            let geometryId = null;
-            
-            if (row.geometry_geojson) {
-                // Use unique ID with timestamp and offset to avoid conflicts
-                geometryId = `geometry-${Date.now()}-${indexOffset + index}`;
-                
-                // Ensure we have a string to work with
-                let geometryString = '';
-                let geojsonGeometry = null;
-                
-                try {
-                    if (typeof row.geometry_geojson === 'string') {
-                        geometryString = row.geometry_geojson;
-                    } else if (typeof row.geometry_geojson === 'object') {
-                        geometryString = JSON.stringify(row.geometry_geojson);
-                    } else {
-                        geometryString = String(row.geometry_geojson);
-                    }
-                    
-                    // Try to parse and add to map if it's valid GeoJSON
-                    if (geometryString && !geometryString.includes('WKB Binary')) {
-                        try {
-                            geojsonGeometry = JSON.parse(geometryString);
-                            if (geojsonGeometry && geojsonGeometry.type) {
-                                // Convert any BigInt values to regular numbers
-                                const safeProperties = {
-                                    taluka: String(row.taluka || ''),
-                                    village: String(row.village || ''),
-                                    survey: String(row.survey || ''),
-                                    subdiv: String(row.subdiv || ''),
-                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
-                                };
-                                
-                                mapFeatures.push({
-                                    type: 'Feature',
-                                    geometry: geojsonGeometry,
-                                    properties: {
-                                        ...safeProperties,
-                                        geometryId: geometryId
-                                    }
-                                });
-                                hasGeometry = true;
-                                hasValidGeometry = true;
-                                geometryForZoom = geojsonGeometry;
-                                
-                                // Store geometry data for button/download access
-                                let centroidData = null;
-                                try {
-                                    const centroid = turf.centroid(geojsonGeometry);
-                                    if (centroid && centroid.geometry && Array.isArray(centroid.geometry.coordinates)) {
-                                        const [centroidLng, centroidLat] = centroid.geometry.coordinates;
-                                        if (typeof centroidLat === 'number' && typeof centroidLng === 'number') {
-                                            centroidData = {
-                                                lat: centroidLat,
-                                                lng: centroidLng
-                                            };
-                                        }
-                                    }
-                                } catch (centroidError) {
-                                    console.warn('Could not calculate centroid for geometry:', centroidError);
-                                }
-
-                                const filenameParts = [
-                                    safeProperties.village || 'village',
-                                    safeProperties.survey || 'survey',
-                                    safeProperties.subdiv || 'subdiv'
-                                ];
-                                const baseName = filenameParts.join('_').replace(/[^a-zA-Z0-9_-]+/g, '_');
-                                // Ensure uniqueness even when survey + subdiv repeat
-                                const filename = `${baseName}_(${index + 1})`;
-                                
-                                window.geometryData[geometryId] = {
-                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
-                                    geometry: geojsonGeometry,
-                                    filename,
-                                    properties: safeProperties,
-                                    centroid: centroidData
-                                };
-                                // Track this geometry for master download
-                                window.currentGeometryIds.push(geometryId);
-                            }
-                        } catch (parseError) {
-                            console.warn('Could not parse geometry as GeoJSON:', parseError);
+    displayOnMap() {
+        this.clearMapPolygons();
+        if (!this.map) return;
+        const bounds = new google.maps.LatLngBounds();
+        let hasValid = false;
+        this.features.forEach((feature) => {
+            try {
+                const geometry = feature.geometry;
+                if (!geometry) return;
+                let paths = [];
+                if (geometry.type === 'Polygon') {
+                    paths = geometry.coordinates[0].map(c => ({ lat: c[1], lng: c[0] }));
+                } else if (geometry.type === 'MultiPolygon') {
+                    paths = geometry.coordinates[0][0].map(c => ({ lat: c[1], lng: c[0] }));
+                } else return;
+                const color = feature.properties._polygonColor || '#007cba';
+                const polygon = new google.maps.Polygon({
+                    paths,
+                    strokeColor: color,
+                    strokeOpacity: 1,
+                    strokeWeight: 2,
+                    fillColor: color,
+                    fillOpacity: 0.3,
+                    map: this.map
+                });
+                const internalProps = ['_plotId', '_missingGeojson', '_error', '_csvRowIndex', '_polygonColor'];
+                let infoContent = '<div style="font-size:12px;max-width:300px;"><strong>Plot</strong><br><br>';
+                Object.keys(feature.properties).forEach(key => {
+                    if (!internalProps.includes(key)) {
+                        const v = feature.properties[key];
+                        if (v !== undefined && v !== null && v !== '') {
+                            infoContent += `<strong>${key}:</strong> ${v}<br>`;
                         }
                     }
-                } catch (e) {
-                    console.error('Error converting geometry to string:', e);
-                }
-                
-                if (hasValidGeometry) {
-                    geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                            <input type="color" 
-                                   value="#007cba" 
-                                   title="Change polygon color"
-                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
-                                   onclick="event.stopPropagation();"
-                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
-                            <button onclick="copyKML('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Download KML
-                            </button>
-                            <button onclick="copyGeoJSON('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Copy GeoJSON
-                            </button>
-                            <button onclick="window.openAmcheLink('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Open in Amche
-                            </button>
-                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
-                                    title="Remove this row from the table"
-                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                &#128465;
-                            </button>
-                        </div>
-                    `;
-                } else {
-                    geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <em>No geometry data</em>
-                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
-                                    title="Remove this row from the table"
-                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                &#128465;
-                            </button>
-                        </div>
-                    `;
-                }
-            } else {
-                geometryDisplay = '<em>No geometry data</em>';
-            }
-
-            // Create row with click handler for zoom functionality
-            const rowClass = hasValidGeometry ? 'clickable-row' : '';
-            const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
-            const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
-            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
-
-            const rowHtml = `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
-                    onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
-                    onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
-                    <td>${row.taluka}</td>
-                    <td>${row.village}</td>
-                    <td>${row.survey}</td>
-                    <td>${row.subdiv}</td>
-                    <td>${row.record_count}</td>
-                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
-                </tr>
-            `;
-            
-            // Append row to existing tbody
-            $('#results table tbody').append(rowHtml);
-        });
-
-        // Update the record count in the header
-        const totalRecords = $('#results table tbody tr').length;
-        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
-
-        // Show/hide master download button based on geometry availability
-        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
-            $('#download-all-container').css('display', 'flex');
-        } else {
-            $('#download-all-container').hide();
-        }
-
-        // Update map with new data (append mode)
-        this.updateMap(mapFeatures, hasGeometry, true);
-    }
-
-    updateMap(features, hasGeometry, appendMode = false) {
-        if (!this.map) {
-            console.warn('Map not ready yet');
-            return;
-        }
-
-        try {
-            // Only clear existing polygons if not in append mode
-            if (!appendMode) {
-                this.clearMapPolygons();
-                this.mapFeatures = features;
-            } else {
-                // Append new features to existing ones
-                this.mapFeatures = this.mapFeatures ? [...this.mapFeatures, ...features] : features;
-            }
-
-            // Show/hide map based on whether we have geometry data
-            if (hasGeometry && features.length > 0) {
-                $('#map-container').show();
-                
-                // Update map info to show total features
-                const totalFeatures = this.mapFeatures ? this.mapFeatures.length : 0;
-                $('#map-info').text(`Showing ${totalFeatures} cadastral parcels`);
-                
-                // Add new polygons to map
-                features.forEach((feature, index) => {
-                    this.addPolygonToMap(feature, index);
                 });
-                
-                // Fit map to show all features
-                setTimeout(() => {
-                    this.fitMapToBounds();
-                }, 100);
-            } else if (!appendMode) {
-                // Only hide map if not in append mode and no geometry
-                $('#map-container').hide();
+                infoContent += '</div>';
+                const infoWindow = new google.maps.InfoWindow({ content: infoContent });
+                polygon.addListener('click', (event) => {
+                    this.mapInfoWindows.forEach(iw => iw.close());
+                    infoWindow.setPosition(event.latLng);
+                    infoWindow.open(this.map);
+                });
+                this.mapPolygons.push(polygon);
+                this.mapInfoWindows.push(infoWindow);
+                paths.forEach(p => bounds.extend(p));
+                hasValid = true;
+            } catch (e) {
+                console.warn('Map feature error:', e);
             }
-        } catch (error) {
-            console.error('Error updating map:', error);
+        });
+        if (hasValid && this.mapPolygons.length > 0) {
+            this.map.fitBounds(bounds, { padding: 50 });
         }
     }
 
-    // Method to change polygon color
-    changePolygonColor(geometryId, newColor) {
-        if (!geometryId || !newColor) return;
-
-        const polygonData = this.polygonColorMap[geometryId];
-        if (polygonData && polygonData.polygon) {
-            // Update the polygon's colors
-            polygonData.polygon.setOptions({
-                strokeColor: newColor,
-                fillColor: newColor
-            });
-            
-            // Save the color for future reloads
-            polygonData.color = newColor;
-        }
+    zoomToPlot(plotId) {
+        const f = this.features.find(x => x.properties._plotId === plotId);
+        if (f && f.geometry) this.zoomToGeometry(f.geometry);
     }
 
-    clearMapPolygons() {
-        // Remove all existing polygons from the map
-        this.mapPolygons.forEach(polygon => {
-            polygon.setMap(null);
-        });
-        this.mapPolygons = [];
-
-        // Close all info windows
-        this.mapInfoWindows.forEach(infoWindow => {
-            infoWindow.close();
-        });
-        this.mapInfoWindows = [];
-        
-        // Clear the polygon color map (but keep the colors for potential reloads)
-        // Only clear references to polygon objects, not the color preferences
-        Object.keys(this.polygonColorMap).forEach(key => {
-            if (this.polygonColorMap[key]) {
-                // Keep the color, but clear the polygon reference
-                const savedColor = this.polygonColorMap[key].color;
-                this.polygonColorMap[key] = { color: savedColor, polygon: null };
-            }
-        });
-    }
-
-    addPolygonToMap(feature, index) {
-        if (!feature.geometry || !this.map) return;
-
-        try {
-            const geometry = feature.geometry;
-            let paths = [];
-
-            if (geometry.type === 'Polygon') {
-                // Convert GeoJSON coordinates to Google Maps LatLng format
-                paths = geometry.coordinates[0].map(coord => ({
-                    lat: coord[1],
-                    lng: coord[0]
-                }));
-            } else if (geometry.type === 'MultiPolygon') {
-                // For MultiPolygon, use the first polygon
-                paths = geometry.coordinates[0][0].map(coord => ({
-                    lat: coord[1],
-                    lng: coord[0]
-                }));
-            } else {
-                console.warn('Unsupported geometry type:', geometry.type);
-                return;
-            }
-
-            // Get geometry ID from feature properties
-            const geometryId = feature.properties.geometryId || `fallback-geometry-${index}`;
-            
-            // Check if there's a saved color for this geometry
-            const savedColor = this.polygonColorMap[geometryId]?.color || '#007cba';
-
-            // Create polygon with styling
-            const polygon = new google.maps.Polygon({
-                paths: paths,
-                strokeColor: savedColor,
-                strokeOpacity: 1.0,
-                strokeWeight: 2,
-                fillColor: savedColor,
-                fillOpacity: 0.3,
-                map: this.map
-            });
-
-            // Create info window content
-            const infoContent = `
-                <div style="font-size: 12px;">
-                    <strong>Cadastral Information</strong><br>
-                    <strong>Taluka:</strong> ${feature.properties.taluka || 'N/A'}<br>
-                    <strong>Village:</strong> ${feature.properties.village || 'N/A'}<br>
-                    <strong>Survey:</strong> ${feature.properties.survey || 'N/A'}<br>
-                    <strong>Subdiv:</strong> ${feature.properties.subdiv || 'N/A'}
-                </div>
-            `;
-
-            const infoWindow = new google.maps.InfoWindow({
-                content: infoContent
-            });
-
-            // Add click listener to polygon
-            polygon.addListener('click', (event) => {
-                // Close all other info windows
-                this.mapInfoWindows.forEach(iw => iw.close());
-                
-                infoWindow.setPosition(event.latLng);
-                infoWindow.open(this.map);
-            });
-
-            // Store polygon and info window
-            this.mapPolygons.push(polygon);
-            this.mapInfoWindows.push(infoWindow);
-            
-            // Store polygon in color map for later color updates
-            this.polygonColorMap[geometryId] = {
-                polygon: polygon,
-                color: savedColor
-            };
-
-        } catch (error) {
-            console.error('Error adding polygon to map:', error);
-        }
-    }
-
-    fitMapToBounds() {
-        if (!this.mapFeatures || this.mapFeatures.length === 0 || !this.map) return;
-
+    zoomToGeometry(geometry) {
+        if (!this.map || !geometry) return;
         try {
             const bounds = new google.maps.LatLngBounds();
-            
-            this.mapFeatures.forEach(feature => {
-                if (feature.geometry.type === 'Polygon') {
-                    feature.geometry.coordinates[0].forEach(coord => {
-                        bounds.extend({ lat: coord[1], lng: coord[0] });
-                    });
-                } else if (feature.geometry.type === 'MultiPolygon') {
-                    feature.geometry.coordinates.forEach(polygon => {
-                        polygon[0].forEach(coord => {
-                            bounds.extend({ lat: coord[1], lng: coord[0] });
-                        });
-                    });
-                } else if (feature.geometry.type === 'Point') {
-                    bounds.extend({ lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0] });
-                }
-            });
-
-            this.map.fitBounds(bounds, { padding: 50 });
-        } catch (error) {
-            console.error('Error fitting bounds:', error);
+            if (geometry.type === 'Polygon') {
+                geometry.coordinates[0].forEach(c => bounds.extend({ lat: c[1], lng: c[0] }));
+            } else if (geometry.type === 'MultiPolygon') {
+                geometry.coordinates.forEach(poly => poly[0].forEach(c => bounds.extend({ lat: c[1], lng: c[0] })));
+            } else if (geometry.type === 'Point') {
+                const pad = 0.001;
+                bounds.extend({ lat: geometry.coordinates[1], lng: geometry.coordinates[0] });
+                bounds.extend({ lat: geometry.coordinates[1] - pad, lng: geometry.coordinates[0] - pad });
+                bounds.extend({ lat: geometry.coordinates[1] + pad, lng: geometry.coordinates[0] + pad });
+            }
+            this.map.fitBounds(bounds, { padding: 100 });
+        } catch (e) {
+            console.error(e);
         }
+    }
+
+    addProperty(plotId) {
+        const feature = this.features.find(f => f.properties._plotId === plotId);
+        if (!feature) return;
+        let finalKey = 'new_property';
+        let c = 1;
+        while (feature.properties.hasOwnProperty(finalKey)) {
+            finalKey = `new_property_${c++}`;
+        }
+        feature.properties[finalKey] = '';
+        this.refreshAfterFeatureChange();
+    }
+
+    removeProperty(plotId, key) {
+        const feature = this.features.find(f => f.properties._plotId === plotId);
+        if (!feature) return;
+        delete feature.properties[key];
+        this.refreshAfterFeatureChange();
+    }
+
+    updatePropertyKey(plotId, oldKey, newKey) {
+        const feature = this.features.find(f => f.properties._plotId === plotId);
+        if (!feature) return;
+        const reserved = ['taluka', 'village', 'survey', 'subdiv', '_plotId', '_polygonColor', '_missingGeojson', '_error', '_csvRowIndex'];
+        if (newKey && newKey !== oldKey && !reserved.includes(newKey) && !newKey.startsWith('_')) {
+            const v = feature.properties[oldKey];
+            delete feature.properties[oldKey];
+            feature.properties[newKey] = v;
+            this.refreshAfterFeatureChange();
+        }
+    }
+
+    updatePropertyValue(plotId, key, value) {
+        const feature = this.features.find(f => f.properties._plotId === plotId);
+        if (!feature) return;
+        feature.properties[key] = value;
+        if (value) this.usedValues.add(String(value));
+        this.displayOnMap();
+    }
+
+    removePlot(plotId) {
+        const idx = this.features.findIndex(f => f.properties._plotId === plotId);
+        if (idx > -1) this.features.splice(idx, 1);
+        this.rowsWithMissingGeojson = this.rowsWithMissingGeojson.filter(f => f.properties._plotId !== plotId);
+        this.refreshAfterFeatureChange();
+    }
+
+    clearAll() {
+        if (!confirm('Clear all plots from the map and table?')) return;
+        this.features = [];
+        this.customProperties = [];
+        this.plotIdCounter = 0;
+        this.usedKeys.clear();
+        this.usedValues.clear();
+        this.rowsWithMissingGeojson = [];
+        $('#results-table-body').empty();
+        $('#csv-upload').val('');
+        $('#csv-status').text('');
+        $('#process-csv').prop('disabled', true);
+        $('#keys-datalist').remove();
+        $('#values-datalist').remove();
+        this.clearMapPolygons();
+        $('#results-section').hide();
+        $('#table-empty-state').show();
+        $('#taluka-dropdown').val('');
+        $('#village-dropdown').prop('disabled', true).empty().append('<option value="">Select Village</option>');
+        $('#survey-dropdown').prop('disabled', true).empty().append('<option value="">Select Survey No (Optional)</option>');
+        $('#subdiv-dropdown').prop('disabled', true).empty().append('<option value="">Select Subdiv (Optional)</option>');
+        $('#add-plot-button').prop('disabled', true);
+        this.updateExportControls();
+        $('#plot-count').text('0');
+    }
+
+    cleanPropsForExport(props) {
+        const out = {};
+        Object.keys(props).forEach(k => {
+            if (!k.startsWith('_')) out[k] = props[k];
+        });
+        return out;
+    }
+
+    exportGeoJSON() {
+        const cleaned = this.features
+            .filter(f => f.geometry)
+            .map(f => ({
+                type: 'Feature',
+                geometry: f.geometry,
+                properties: this.cleanPropsForExport(f.properties)
+            }));
+        if (cleaned.length === 0) {
+            alert('No plots with geometry to export.');
+            return;
+        }
+        const fc = { type: 'FeatureCollection', features: cleaned };
+        const blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'goa_cadastral_plots.geojson';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert(`GeoJSON downloaded (${cleaned.length} plot(s)).`);
+    }
+
+    exportKML() {
+        if (typeof tokml === 'undefined') {
+            alert('KML library not loaded');
+            return;
+        }
+        const cleaned = this.features
+            .filter(f => f.geometry)
+            .map(f => ({
+                type: 'Feature',
+                geometry: f.geometry,
+                properties: this.cleanPropsForExport(f.properties)
+            }));
+        if (cleaned.length === 0) {
+            alert('No plots with geometry to export.');
+            return;
+        }
+        const fc = { type: 'FeatureCollection', features: cleaned };
+        const blob = new Blob([tokml(fc)], { type: 'application/vnd.google-earth.kml+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'goa_cadastral_plots.kml';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert(`KML downloaded (${cleaned.length} plot(s)).`);
     }
 
     setupEventListeners() {
@@ -987,13 +1129,14 @@ class CadastralDataApp {
                     .append('<option value="">Select Survey No (Optional)</option>');
                 $('#subdiv-dropdown').prop('disabled', true).empty()
                     .append('<option value="">Select Subdiv (Optional)</option>');
+                $('#add-plot-button').prop('disabled', true);
             }
         });
 
         $('#village-dropdown').on('change', async (e) => {
             const selectedVillage = e.target.value;
             console.log('Village selected:', selectedVillage);
-            
+            $('#add-plot-button').prop('disabled', !selectedVillage);
             if (selectedVillage) {
                 try {
                     await this.populateSurveyDropdown(selectedVillage);
@@ -1024,716 +1167,122 @@ class CadastralDataApp {
             }
         });
 
-        $('#load-data').on('click', async () => {
-            const selectedVillage = $('#village-dropdown').val();
-            const selectedSurvey = $('#survey-dropdown').val();
-            const selectedSubdiv = $('#subdiv-dropdown').val();
-            
-            if (selectedVillage) {
-                await this.loadVillageData(selectedVillage, selectedSurvey, selectedSubdiv);
-            } else {
-                alert('Please select a village first');
-            }
+        $('#add-plot-button').on('click', () => {
+            this.addPlotFromDropdowns();
         });
 
-        // Map control event listeners
-        $('#fit-bounds').on('click', () => {
-            this.fitMapToBounds();
+        $('#clear-all-btn').on('click', () => {
+            this.clearAll();
         });
 
-        $('#toggle-labels').on('click', () => {
-            // Labels functionality not applicable for Google Maps polygons
-            // Could be implemented with markers if needed
-            console.log('Label toggle not implemented for Google Maps');
-        });
-
-        $('#clear-map').on('click', () => {
-            if (this.map) {
-                this.clearMapPolygons();
-                this.mapFeatures = [];
-                $('#map-info').text('Map cleared');
-                $('#map-container').hide();
-            }
-        });
+        // View toggle is handled by window.switchView in index.html
     }
 
     downloadCsvTemplate() {
-        const csvContent = `taluka,village,survey,subdiv
-Tiswadi,Panaji,123,A
-Salcete,Margao,456,B
-Mormugao,Vasco,789,C`;
-        
+        const csvContent = 'village,survey,subdiv,taluka,owner_note\n' +
+            'Panaji,123,A,Tiswadi,Example note\n' +
+            'Margao,99/5-A,,,\n' +
+            'Vasco,456,,Mormugao,\n';
         const blob = new Blob([csvContent], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
-        
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'cadastral_search_template.csv';
+        a.download = 'cadastral_template.csv';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
-        $('#csv-status').html('<span style="color: #28a745;">✓ Template downloaded</span>');
+        $('#csv-status').html('<span style="color:#28a745;">Template downloaded</span>');
     }
 
     async processCsvFile() {
         const fileInput = document.getElementById('csv-upload');
         const file = fileInput.files[0];
-        
         if (!file) {
             alert('Please select a CSV file first');
             return;
         }
-
-        $('#csv-status').text('Processing CSV...');
+        $('#csv-status').text('Processing CSV…');
         $('#process-csv').prop('disabled', true);
-
+        $('#loading').show();
         try {
             const csvText = await this.readFileAsText(file);
-            const searchCriteria = this.parseCsv(csvText);
-            
-            if (searchCriteria.length === 0) {
-                $('#csv-status').html('<span style="color: #dc3545;">No valid data found in CSV</span>');
-                $('#process-csv').prop('disabled', false);
+            const parsed = this.parseCsv(csvText);
+            if (parsed.rows.length === 0) {
+                $('#csv-status').html('<span style="color:#dc3545;">No valid data in CSV</span>');
                 return;
             }
-
-            $('#csv-status').text(`Found ${searchCriteria.length} search criteria. Searching...`);
-            
-            await this.performBulkSearch(searchCriteria);
-            
+            const merged = new Set([...(this.customProperties || []), ...parsed.customProperties]);
+            this.customProperties = [...merged];
+            $('#csv-status').text(`Found ${parsed.rows.length} row(s). Searching…`);
+            await this.searchAndDisplay(parsed.rows, true);
         } catch (error) {
-            console.error('Error processing CSV:', error);
-            $('#csv-status').html(`<span style="color: #dc3545;">Error: ${error.message}</span>`);
+            console.error(error);
+            $('#csv-status').html(`<span style="color:#dc3545;">Error: ${error.message}</span>`);
+            alert('Error: ' + error.message);
         } finally {
             $('#process-csv').prop('disabled', false);
-        }
-    }
-
-    readFileAsText(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = () => reject(new Error('Failed to read file'));
-            reader.readAsText(file);
-        });
-    }
-
-    parseCsv(csvText) {
-        const lines = csvText.trim().split('\n');
-        if (lines.length < 2) {
-            throw new Error('CSV must have at least a header row and one data row');
-        }
-
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-        const talukaIndex = headers.indexOf('taluka');
-        const villageIndex = headers.indexOf('village');
-        const surveyIndex = headers.indexOf('survey');
-        const subdivIndex = headers.indexOf('subdiv');
-
-        if (villageIndex === -1) {
-            throw new Error('CSV must have a "village" column');
-        }
-
-        if (talukaIndex === -1) {
-            throw new Error('CSV must have a "taluka" column');
-        }
-
-        const searchCriteria = [];
-        for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].split(',').map(v => v.trim());
-            
-            if (values.length >= headers.length && values[villageIndex] && values[talukaIndex]) {
-                searchCriteria.push({
-                    taluka: values[talukaIndex],
-                    village: values[villageIndex],
-                    survey: surveyIndex !== -1 ? values[surveyIndex] : null,
-                    subdiv: subdivIndex !== -1 ? values[subdivIndex] : null
-                });
-            }
-        }
-
-        return searchCriteria;
-    }
-
-    async performBulkSearch(searchCriteria) {
-        $('#loading').show();
-        // Don't clear results - we want to append to existing data
-
-        try {
-            const allResults = [];
-            const allMapFeatures = [];
-            let hasGeometry = false;
-            
-            for (const criteria of searchCriteria) {
-                try {
-                    const results = await this.searchSingleCriteria(criteria);
-                    allResults.push(...results.data);
-                    allMapFeatures.push(...results.mapFeatures);
-                    if (results.hasGeometry) hasGeometry = true;
-                } catch (error) {
-                    console.warn(`Error searching for ${criteria.taluka}/${criteria.village}/${criteria.survey}/${criteria.subdiv}:`, error);
-                }
-            }
-
-            if (allResults.length === 0) {
-                $('#csv-status').html('<span style="color: #dc3545;">No matching records found</span>');
-                $('#results').html('<p>No data found for any of the search criteria</p>');
-                $('#map-container').hide();
-                return;
-            }
-
-            $('#csv-status').html(`<span style="color: #28a745;">✓ Found ${allResults.length} records</span>`);
-            
-            // Display results - pass mapFeatures so we can match geometryIds
-            this.displayBulkResults(allResults, searchCriteria.length, allMapFeatures);
-            this.updateMap(allMapFeatures, hasGeometry, true);
-
-        } catch (error) {
-            console.error('Error in bulk search:', error);
-            $('#csv-status').html(`<span style="color: #dc3545;">Error: ${error.message}</span>`);
-        } finally {
             $('#loading').hide();
-        }
-    }
-
-    async searchSingleCriteria(criteria) {
-        const safeVillageName = criteria.village.replace(/[^a-zA-Z0-9-_]/g, '_');
-        const tableName = `village_${safeVillageName}`;
-        
-        // Load village file if not already loaded
-        if (!this.loadedFiles.has(tableName)) {
-            await this.loadParquetFile(`${criteria.village}.parquet`, tableName);
-        }
-
-        const connection = await this.db.connect();
-        
-        try {
-            let whereClause = '';
-            let filters = [];
-            
-            // Add taluka filter to ensure we match the correct taluka
-            if (criteria.taluka) {
-                const escapedTaluka = criteria.taluka.replace(/'/g, "''");
-                filters.push(`taluka = '${escapedTaluka}'`);
-            }
-            
-            if (criteria.survey) {
-                const escapedSurvey = criteria.survey.replace(/'/g, "''");
-                filters.push(`survey = '${escapedSurvey}'`);
-            }
-            
-            if (criteria.subdiv) {
-                const escapedSubdiv = criteria.subdiv.replace(/'/g, "''");
-                filters.push(`subdiv = '${escapedSubdiv}'`);
-            }
-            
-            if (filters.length > 0) {
-                whereClause = 'WHERE ' + filters.join(' AND ');
-            }
-
-            let result;
-            if (this.spatialEnabled) {
-                try {
-                    result = await connection.query(`
-                        SELECT taluka, village, survey, subdiv, 
-                               ST_AsGeoJSON(ST_GeomFromWKB(geometry)) as geometry_geojson,
-                               COUNT(*) as record_count
-                        FROM ${tableName}
-                        ${whereClause}
-                        GROUP BY taluka, village, survey, subdiv, geometry
-                        ORDER BY survey, subdiv
-                        LIMIT 100
-                    `);
-                } catch (spatialError) {
-                    result = await connection.query(`
-                        SELECT taluka, village, survey, subdiv, 
-                               'WKB Binary Geometry Data (Spatial functions failed)' as geometry_geojson,
-                               COUNT(*) as record_count
-                        FROM ${tableName}
-                        ${whereClause}
-                        GROUP BY taluka, village, survey, subdiv
-                        ORDER BY survey, subdiv
-                        LIMIT 100
-                    `);
-                }
-            } else {
-                result = await connection.query(`
-                    SELECT taluka, village, survey, subdiv, 
-                           'WKB Binary Geometry Data (Spatial extension not available in DuckDB WASM)' as geometry_geojson,
-                           COUNT(*) as record_count
-                    FROM ${tableName}
-                    ${whereClause}
-                    GROUP BY taluka, village, survey, subdiv
-                    ORDER BY survey, subdiv
-                    LIMIT 100
-                `);
-            }
-
-            const data = result.toArray();
-            const mapFeatures = [];
-            let hasGeometry = false;
-
-            // Process geometry data for map
-            data.forEach((row, index) => {
-                if (row.geometry_geojson && !row.geometry_geojson.includes('WKB Binary')) {
-                    try {
-                        const geometryString = typeof row.geometry_geojson === 'string' 
-                            ? row.geometry_geojson 
-                            : JSON.stringify(row.geometry_geojson);
-                        
-                        const geojsonGeometry = JSON.parse(geometryString);
-                        if (geojsonGeometry && geojsonGeometry.type) {
-                            const safeProperties = {
-                                taluka: String(row.taluka || ''),
-                                village: String(row.village || ''),
-                                survey: String(row.survey || ''),
-                                subdiv: String(row.subdiv || ''),
-                                records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
-                            };
-                            
-                            // Generate geometry ID for this feature
-                            const geometryId = `bulk-geometry-${Date.now()}-${index}`;
-                            
-                            mapFeatures.push({
-                                type: 'Feature',
-                                geometry: geojsonGeometry,
-                                properties: {
-                                    ...safeProperties,
-                                    geometryId: geometryId
-                                }
-                            });
-                            hasGeometry = true;
-                        }
-                    } catch (parseError) {
-                        console.warn('Could not parse geometry as GeoJSON:', parseError);
-                    }
-                }
-            });
-
-            return { data, mapFeatures, hasGeometry };
-
-        } finally {
-            await connection.close();
-        }
-    }
-
-    displayBulkResults(data, searchCount, mapFeatures = []) {
-        if (data.length === 0) {
-            // Only show "no data" message if there's no existing table
-            if ($('#results table tbody tr').length === 0) {
-                $('#results').html('<p>No data found for the search criteria</p>');
-            }
-            return;
-        }
-
-        // Initialize geometry data storage if not exists
-        if (!window.geometryData) {
-            window.geometryData = {};
-        }
-        // Initialize or keep existing geometry IDs array (don't reset it!)
-        if (!window.currentGeometryIds) {
-            window.currentGeometryIds = [];
-        }
-
-        // Check if table already exists
-        const existingTable = $('#results table tbody');
-        const tableExists = existingTable.length > 0;
-
-        // If table doesn't exist, create it
-        if (!tableExists) {
-            let html = `
-                <h3>Cadastral Data (0 records)</h3>
-                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
-                    💡 Click on any row to zoom to that parcel on the map<br>
-                    🎨 Use the color picker to customize each polygon's color
-                </p>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Taluka</th>
-                                <th>Village</th>
-                                <th>Survey</th>
-                                <th>Subdiv</th>
-                                <th>Records</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            $('#results').html(html);
-        }
-
-        // Create a map of data rows to their corresponding mapFeatures for geometryId lookup
-        const dataToFeatureMap = new Map();
-        mapFeatures.forEach(feature => {
-            const key = `${feature.properties.taluka}-${feature.properties.village}-${feature.properties.survey}-${feature.properties.subdiv}`;
-            if (!dataToFeatureMap.has(key)) {
-                dataToFeatureMap.set(key, []);
-            }
-            dataToFeatureMap.get(key).push(feature);
-        });
-
-        // Generate unique index offset based on existing geometries
-        const indexOffset = window.currentGeometryIds.length;
-
-        data.forEach((row, index) => {
-            let geometryDisplay = '';
-            let hasValidGeometry = false;
-            let geometryForZoom = null;
-            let geometryId = null;
-            
-            // Try to find matching mapFeature to get the correct geometryId
-            const rowKey = `${row.taluka}-${row.village}-${row.survey}-${row.subdiv}`;
-            const matchingFeatures = dataToFeatureMap.get(rowKey) || [];
-            let matchingFeature = null;
-            
-            if (matchingFeatures.length > 0) {
-                // Use the first unassigned feature or fallback to first
-                matchingFeature = matchingFeatures.shift();
-                geometryId = matchingFeature.properties.geometryId;
-            }
-            
-            if (row.geometry_geojson) {
-                // If we didn't find a matching feature, create a fallback geometryId
-                if (!geometryId) {
-                    geometryId = `bulk-geometry-fallback-${index}`;
-                }
-                
-                let geometryString = '';
-                let geojsonGeometry = null;
-                
-                try {
-                    if (typeof row.geometry_geojson === 'string') {
-                        geometryString = row.geometry_geojson;
-                    } else if (typeof row.geometry_geojson === 'object') {
-                        geometryString = JSON.stringify(row.geometry_geojson);
-                    } else {
-                        geometryString = String(row.geometry_geojson);
-                    }
-                    
-                    // Check if this is valid GeoJSON for zoom functionality
-                    if (geometryString && !geometryString.includes('WKB Binary')) {
-                        try {
-                            geojsonGeometry = JSON.parse(geometryString);
-                            if (geojsonGeometry && geojsonGeometry.type) {
-                                hasValidGeometry = true;
-                                geometryForZoom = geojsonGeometry;
-                                
-                                // Store geometry data for button/download access
-                                const safeTaluka = String(row.taluka || 'taluka');
-                                const safeVillage = String(row.village || 'village');
-                                const safeSurvey = String(row.survey || 'survey');
-                                const safeSubdiv = String(row.subdiv || 'subdiv');
-                                const baseName = `${safeVillage}_${safeSurvey}_${safeSubdiv}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
-                                // Ensure uniqueness even when survey + subdiv repeat
-                                const filename = `${baseName}_(${index + 1})`;
-
-                                const safeProperties = {
-                                    taluka: safeTaluka,
-                                    village: safeVillage,
-                                    survey: safeSurvey,
-                                    subdiv: safeSubdiv,
-                                    records: typeof row.record_count === 'bigint' ? Number(row.record_count) : row.record_count
-                                };
-                                
-                                let centroidData = null;
-                                try {
-                                    const centroid = turf.centroid(geojsonGeometry);
-                                    if (centroid && centroid.geometry && Array.isArray(centroid.geometry.coordinates)) {
-                                        const [centroidLng, centroidLat] = centroid.geometry.coordinates;
-                                        if (typeof centroidLat === 'number' && typeof centroidLng === 'number') {
-                                            centroidData = {
-                                                lat: centroidLat,
-                                                lng: centroidLng
-                                            };
-                                        }
-                                    }
-                                } catch (centroidError) {
-                                    console.warn('Could not calculate centroid for geometry:', centroidError);
-                                }
-
-                                window.geometryData[geometryId] = {
-                                    geojson: JSON.stringify(geojsonGeometry, null, 2),
-                                    geometry: geojsonGeometry,
-                                    filename,
-                                    properties: safeProperties,
-                                    centroid: centroidData
-                                };
-
-                                // Track this geometry for master download and future map updates
-                                window.currentGeometryIds.push(geometryId);
-                            }
-                        } catch (parseError) {
-                            console.warn('Could not parse geometry as GeoJSON:', parseError);
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error processing geometry:', e);
-                }
-                
-                if (hasValidGeometry) {
-                    geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                            <input type="color" 
-                                   value="#007cba" 
-                                   title="Change polygon color"
-                                   onchange="window.cadastralApp.changePolygonColor('${geometryId}', this.value); event.stopPropagation();"
-                                   onclick="event.stopPropagation();"
-                                   style="width: 35px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 0;">
-                            <button onclick="copyKML('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Download KML
-                            </button>
-                            <button onclick="copyGeoJSON('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Copy GeoJSON
-                            </button>
-                            <button onclick="window.openAmcheLink('${geometryId}')" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                Open in Amche
-                            </button>
-                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
-                                    title="Remove this row from the table"
-                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                &#128465;
-                            </button>
-                        </div>
-                    `;
-                } else {
-                    geometryDisplay = `
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <em>No geometry data</em>
-                            <button onclick="window.deleteTableRow(this); event.stopPropagation();" 
-                                    title="Remove this row from the table"
-                                    style="padding: 6px 10px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                &#128465;
-                            </button>
-                        </div>
-                    `;
-                }
-            } else {
-                geometryDisplay = '<em>No geometry data</em>';
-            }
-
-            // Create row with click handler for zoom functionality
-            const rowClass = hasValidGeometry ? 'clickable-row' : '';
-            const rowStyle = hasValidGeometry ? 'cursor: pointer; transition: background-color 0.2s;' : '';
-            const onClickHandler = hasValidGeometry ? `onclick="window.cadastralApp.zoomToGeometry(${JSON.stringify(geometryForZoom).replace(/"/g, '&quot;')})"` : '';
-            const geometryAttr = geometryId && hasValidGeometry ? `data-geometry-id="${geometryId}"` : '';
-
-            const rowHtml = `
-                <tr class="${rowClass}" style="${rowStyle}" ${onClickHandler} ${geometryAttr}
-                    onmouseover="if(this.classList.contains('clickable-row')) this.style.backgroundColor='#f8f9fa'" 
-                    onmouseout="if(this.classList.contains('clickable-row')) this.style.backgroundColor=''">
-                    <td>${row.taluka}</td>
-                    <td>${row.village}</td>
-                    <td>${row.survey}</td>
-                    <td>${row.subdiv}</td>
-                    <td>${row.record_count}</td>
-                    <td style="max-width: 450px;" onclick="event.stopPropagation()">${geometryDisplay}</td>
-                </tr>
-            `;
-            
-            // Append row to existing tbody
-            $('#results table tbody').append(rowHtml);
-        });
-
-        // Update the record count in the header
-        const totalRecords = $('#results table tbody tr').length;
-        $('#results h3').text(`Cadastral Data (${totalRecords} records)`);
-        
-        // Show/hide master download button based on geometry availability
-        if (window.currentGeometryIds && window.currentGeometryIds.length > 0) {
-            $('#download-all-container').css('display', 'flex');
-        } else {
-            $('#download-all-container').hide();
-        }
-    }
-
-    // Add method to zoom to specific geometry
-    zoomToGeometry(geometry) {
-        if (!this.map || !geometry) {
-            console.warn('Map not ready or no geometry provided');
-            return;
-        }
-
-        try {
-            const bounds = new google.maps.LatLngBounds();
-            
-            if (geometry.type === 'Polygon') {
-                geometry.coordinates[0].forEach(coord => {
-                    bounds.extend({ lat: coord[1], lng: coord[0] });
-                });
-            } else if (geometry.type === 'MultiPolygon') {
-                geometry.coordinates.forEach(polygon => {
-                    polygon[0].forEach(coord => {
-                        bounds.extend({ lat: coord[1], lng: coord[0] });
-                    });
-                });
-            } else if (geometry.type === 'Point') {
-                bounds.extend({ lat: geometry.coordinates[1], lng: geometry.coordinates[0] });
-                // For points, add some padding since a single point doesn't create bounds
-                const padding = 0.001; // roughly 100m
-                bounds.extend({ lat: geometry.coordinates[1] - padding, lng: geometry.coordinates[0] - padding });
-                bounds.extend({ lat: geometry.coordinates[1] + padding, lng: geometry.coordinates[0] + padding });
-            }
-
-            // Zoom to the bounds with some padding
-            this.map.fitBounds(bounds, { padding: 100 });
-
-            // Show map container if it's hidden
-            $('#map-container').show();
-
-        } catch (error) {
-            console.error('Error zooming to geometry:', error);
-        }
-    }
-
-    // Remove a single geometry (and its polygon) from the map using its geometry ID
-    removeGeometryById(geometryId) {
-        if (!geometryId) return;
-
-        try {
-            // Remove from currentGeometryIds (used for "Download All")
-            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
-                window.currentGeometryIds = window.currentGeometryIds.filter(id => id !== geometryId);
-                if (window.currentGeometryIds.length === 0) {
-                    $('#download-all-container').hide();
-                }
-            }
-
-            // Remove stored geometry data
-            if (window.geometryData && window.geometryData[geometryId]) {
-                delete window.geometryData[geometryId];
-            }
-            
-            // Rebuild map features from remaining geometry data and refresh map
-            const remainingFeatures = [];
-            if (window.currentGeometryIds && Array.isArray(window.currentGeometryIds)) {
-                window.currentGeometryIds.forEach(id => {
-                    const g = window.geometryData && window.geometryData[id];
-                    if (g && g.geometry) {
-                        remainingFeatures.push({
-                            type: 'Feature',
-                            geometry: g.geometry,
-                            properties: g.properties || {}
-                        });
-                    }
-                });
-            }
-
-            const hasGeometry = remainingFeatures.length > 0;
-            this.updateMap(remainingFeatures, hasGeometry);
-
-            // Update map info / visibility text if element exists
-            if (!hasGeometry) {
-                $('#map-info').text('Map cleared');
-            } else {
-                $('#map-info').text(`Showing ${remainingFeatures.length} cadastral parcels`);
-            }
-        } catch (error) {
-            console.error('Error removing geometry by ID:', error);
         }
     }
 }
 
-// Global functions for downloading KML and copying GeoJSON
-window.copyKML = function(geometryId) {
-    const geometryData = window.geometryData && window.geometryData[geometryId];
-    if (!geometryData || !geometryData.geometry) {
-        alert('No geometry data available');
+function plotFileBase(props) {
+    const v = [props.village, props.survey, props.subdiv].map(x => String(x || '').replace(/[^a-zA-Z0-9_-]+/g, '_')).join('_');
+    return v || 'parcel';
+}
+
+window.copyKML = function(plotId) {
+    const app = window.cadastralApp;
+    const f = app && app.features.find(x => x.properties._plotId === plotId);
+    if (!f || !f.geometry) {
+        alert('No geometry for this plot');
         return;
     }
-    
-    // Create a Feature for tokml (it expects a Feature or FeatureCollection)
-    const feature = {
-        type: 'Feature',
-        geometry: geometryData.geometry,
-        properties: {}
-    };
-    
-    // Use tokml library if available
-    let kml;
-    if (typeof tokml !== 'undefined') {
-        kml = tokml(feature);
-    } else {
-        alert('KML converter library not loaded');
+    if (typeof tokml === 'undefined') {
+        alert('KML library not loaded');
         return;
     }
-    
-    // Determine filename for download
-    const baseName = geometryData.filename || 'parcel';
-    const fileName = `${baseName}.kml`;
-    
-    // Create a blob and trigger download
+    const props = app.cleanPropsForExport(f.properties);
+    const kml = tokml({ type: 'Feature', geometry: f.geometry, properties: props });
+    const baseName = plotFileBase(f.properties);
     const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
     const url = URL.createObjectURL(blob);
-    
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName;
+    a.download = `${baseName}.kml`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 };
 
-// Master download: ZIP containing KML + GeoJSON for all visible plots
 window.downloadAllGeometries = function() {
-    if (!window.currentGeometryIds || window.currentGeometryIds.length === 0) {
-        alert('No plots with geometry available to download');
+    const app = window.cadastralApp;
+    if (!app || typeof JSZip === 'undefined' || typeof tokml === 'undefined') {
+        alert('App or libraries not ready');
         return;
     }
-
-    if (typeof JSZip === 'undefined') {
-        alert('ZIP library (JSZip) not loaded');
+    const withGeom = app.features.filter(f => f.geometry);
+    if (withGeom.length === 0) {
+        alert('No plots with geometry to download');
         return;
     }
-
-    if (typeof tokml === 'undefined') {
-        alert('KML converter library (tokml) not loaded');
-        return;
-    }
-
     const zip = new JSZip();
-    let filesAdded = 0;
-
-    window.currentGeometryIds.forEach((geometryId, index) => {
-        const geometryData = window.geometryData && window.geometryData[geometryId];
-        if (!geometryData || !geometryData.geometry || !geometryData.geojson) {
-            return;
-        }
-
-        const baseName = geometryData.filename || `plot_${index + 1}`;
+    let n = 0;
+    withGeom.forEach((f, index) => {
+        const baseName = `${plotFileBase(f.properties)}_${index + 1}`;
         const folder = zip.folder(baseName);
-
-        // Prepare GeoJSON content
-        const geojsonContent = geometryData.geojson;
-        folder.file(`${baseName}.geojson`, geojsonContent);
-
-        // Prepare KML content via tokml
-        const feature = {
-            type: 'Feature',
-            geometry: geometryData.geometry,
-            properties: {}
-        };
-        const kmlContent = tokml(feature);
-        folder.file(`${baseName}.kml`, kmlContent);
-
-        filesAdded += 2;
+        const props = app.cleanPropsForExport(f.properties);
+        const feat = { type: 'Feature', geometry: f.geometry, properties: props };
+        folder.file(`${baseName}.geojson`, JSON.stringify(feat, null, 2));
+        folder.file(`${baseName}.kml`, tokml(feat));
+        n += 2;
     });
-
-    if (filesAdded === 0) {
-        alert('No geometry data available to include in ZIP');
+    if (n === 0) {
+        alert('Nothing to add to ZIP');
         return;
     }
-
     zip.generateAsync({ type: 'blob' }).then((content) => {
         const url = URL.createObjectURL(content);
         const a = document.createElement('a');
@@ -1744,119 +1293,61 @@ window.downloadAllGeometries = function() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }).catch((err) => {
-        console.error('Error generating ZIP:', err);
-        alert('Failed to generate ZIP file');
+        console.error(err);
+        alert('Failed to generate ZIP');
     });
 };
 
-window.copyGeoJSON = function(geometryId) {
-    const geometryData = window.geometryData && window.geometryData[geometryId];
-    if (!geometryData || !geometryData.geojson) {
-        alert('No geometry data available');
+window.copyGeoJSON = function(plotId, button) {
+    const app = window.cadastralApp;
+    const f = app && app.features.find(x => x.properties._plotId === plotId);
+    if (!f || !f.geometry) {
+        alert('No geometry for this plot');
         return;
     }
-    
-    const geojson = geometryData.geojson;
-    const button = event.target;
-    
+    const clean = {};
+    Object.keys(f.properties).forEach(k => {
+        if (!k.startsWith('_')) clean[k] = f.properties[k];
+    });
+    const geojson = JSON.stringify({ type: 'Feature', geometry: f.geometry, properties: clean }, null, 2);
+    const btn = button || (typeof event !== 'undefined' ? event.target : null);
     if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(geojson).then(() => {
-            const originalText = button.textContent;
-            button.textContent = 'Copied!';
-            button.style.backgroundColor = '#198754';
-            setTimeout(() => {
-                button.textContent = originalText;
-                button.style.backgroundColor = '#28a745';
-            }, 1500);
-        }).catch(err => {
-            console.error('Failed to copy: ', err);
-            alert('Failed to copy to clipboard');
-        });
+            if (btn) {
+                const t = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = t; }, 1500);
+            }
+        }).catch(() => alert('Copy failed'));
     } else {
-        // Fallback for older browsers
         const textarea = document.createElement('textarea');
         textarea.value = geojson;
         document.body.appendChild(textarea);
         textarea.select();
         document.execCommand('copy');
         document.body.removeChild(textarea);
-        alert('GeoJSON copied to clipboard!');
+        alert('GeoJSON copied');
     }
 };
 
-// Open selected plot in Amche.in at the polygon's centroid
-window.openAmcheLink = function(geometryId) {
-    const geometryData = window.geometryData && window.geometryData[geometryId];
-    if (!geometryData || !geometryData.centroid) {
-        alert('No center point available for this plot');
+window.openAmcheLink = function(plotId) {
+    const app = window.cadastralApp;
+    const f = app && app.features.find(x => x.properties._plotId === plotId);
+    if (!f || !f.geometry) {
+        alert('No geometry for this plot');
         return;
     }
-
-    const { lat, lng } = geometryData.centroid;
-    if (typeof lat !== 'number' || typeof lng !== 'number') {
-        alert('Invalid center point for this plot');
-        return;
-    }
-
-    const zoom = 16.44; // Match example: https://amche.in/?terrain=1.5#16.44/lat/lng
-    const latStr = lat.toFixed(6);
-    const lngStr = lng.toFixed(6);
-    const url = `https://amche.in/?layers=goa-2021-regional-plan&terrain=1.5#${zoom}/${latStr}/${lngStr}`
-    window.open(url, '_blank');
-};
-
-// Function to clear the entire results table and map
-window.clearResultsTable = function() {
-    if (!confirm('Are you sure you want to clear all results and reset the map?')) {
-        return;
-    }
-    
-    // Clear the results div
-    $('#results').empty();
-    
-    // Clear geometry data
-    if (window.geometryData) {
-        window.geometryData = {};
-    }
-    if (window.currentGeometryIds) {
-        window.currentGeometryIds = [];
-    }
-    
-    // Hide download button container
-    $('#download-all-container').hide();
-    
-    // Clear the map
-    if (window.cadastralApp && window.cadastralApp.map) {
-        window.cadastralApp.clearMapPolygons();
-        window.cadastralApp.mapFeatures = [];
-        $('#map-container').hide();
-    }
-};
-
-// Simple helper to remove a table row when the delete icon is clicked
-window.deleteTableRow = function(buttonElement) {
-    if (!buttonElement) return;
-    let row = buttonElement.closest && buttonElement.closest('tr');
-
-    // Fallback for older browsers without closest support
-    if (!row) {
-        let el = buttonElement;
-        while (el && el.tagName !== 'TR') {
-            el = el.parentElement;
+    try {
+        const c = turf.centroid(f.geometry);
+        const [lng, lat] = c.geometry.coordinates;
+        if (typeof lat !== 'number' || typeof lng !== 'number') {
+            alert('Could not get centroid');
+            return;
         }
-        row = el;
-    }
-
-    if (!row) return;
-
-    // If this row is tied to a geometry on the map, remove that as well
-    const geometryId = row.getAttribute && row.getAttribute('data-geometry-id');
-    if (geometryId && window.cadastralApp && typeof window.cadastralApp.removeGeometryById === 'function') {
-        window.cadastralApp.removeGeometryById(geometryId);
-    }
-
-    if (row.parentElement) {
-        row.parentElement.removeChild(row);
+        const zoom = 16.44;
+        window.open(`https://amche.in/?layers=goa-2021-regional-plan&terrain=1.5#${zoom}/${lat.toFixed(6)}/${lng.toFixed(6)}`, '_blank');
+    } catch (e) {
+        alert('Could not compute centroid');
     }
 };
 
