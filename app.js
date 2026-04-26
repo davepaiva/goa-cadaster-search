@@ -605,7 +605,7 @@ class CadastralDataApp {
             }
             if (row.subdiv !== null && row.subdiv !== undefined && row.subdiv !== '') {
                 const escapedSubdiv = row.subdiv.replace(/'/g, "''");
-                filters.push(`subdiv = '${escapedSubdiv}'`);
+                filters.push(`REPLACE(subdiv, '-', '') = REPLACE('${escapedSubdiv}', '-', '')`);
             }
             const whereClause = filters.length > 0 ? 'WHERE ' + filters.join(' AND ') : '';
             let result;
