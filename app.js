@@ -8,6 +8,7 @@ class CadastralDataApp {
         this.map = null;
         this.mapPolygons = [];
         this.mapInfoWindows = [];
+        this.mapLabels = [];
         this.features = [];
         this.customProperties = [];
         this.plotIdCounter = 0;
@@ -453,6 +454,8 @@ class CadastralDataApp {
         this.mapPolygons = [];
         this.mapInfoWindows.forEach(iw => iw.close());
         this.mapInfoWindows = [];
+        this.mapLabels.forEach(m => m.setMap(null));
+        this.mapLabels = [];
     }
 
     countFeaturesWithGeometry() {
@@ -899,23 +902,69 @@ class CadastralDataApp {
                     fillOpacity: 0.3,
                     map: this.map
                 });
+                // Compute centroid for label placement
+                const centroid = paths.reduce(
+                    (acc, p) => ({ lat: acc.lat + p.lat / paths.length, lng: acc.lng + p.lng / paths.length }),
+                    { lat: 0, lng: 0 }
+                );
+
+                // Build persistent survey/subdiv label
+                const props = feature.properties;
+                const labelText = props.survey
+                    ? (props.subdiv ? `${props.survey}/${props.subdiv}` : String(props.survey))
+                    : '';
+                if (labelText) {
+                    const labelMarker = new google.maps.Marker({
+                        position: centroid,
+                        map: this.map,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: 0,
+                            fillOpacity: 0,
+                            strokeOpacity: 0
+                        },
+                        label: {
+                            text: labelText,
+                            color: '#ffffff',
+                            fontSize: '11px',
+                            fontWeight: 'bold'
+                        },
+                        zIndex: 10
+                    });
+                    this.mapLabels.push(labelMarker);
+                }
+
+                // Build hover tooltip content
                 const internalProps = ['_plotId', '_missingGeojson', '_error', '_csvRowIndex', '_polygonColor'];
-                let infoContent = '<div style="font-size:12px;max-width:300px;"><strong>Plot</strong><br><br>';
-                Object.keys(feature.properties).forEach(key => {
-                    if (!internalProps.includes(key)) {
-                        const v = feature.properties[key];
-                        if (v !== undefined && v !== null && v !== '') {
-                            infoContent += `<strong>${key}:</strong> ${v}<br>`;
-                        }
-                    }
+                const customEntries = Object.keys(props).filter(k => !internalProps.includes(k) && props[k] !== undefined && props[k] !== null && props[k] !== '');
+                let infoContent = '<div style="font-size:12px;max-width:300px;line-height:1.6;">';
+                infoContent += `<div style="font-weight:700;margin-bottom:6px;font-size:13px;">${props.village || ''} &mdash; ${labelText || 'All surveys'}</div>`;
+                customEntries.forEach(key => {
+                    infoContent += `<div><span style="color:#555;font-weight:600;">${key}:</span> ${props[key]}</div>`;
                 });
+                if (customEntries.length === 0) {
+                    infoContent += '<div style="color:#888;font-style:italic;">No additional properties</div>';
+                }
                 infoContent += '</div>';
-                const infoWindow = new google.maps.InfoWindow({ content: infoContent });
-                polygon.addListener('click', (event) => {
+
+                const infoWindow = new google.maps.InfoWindow({
+                    content: infoContent,
+                    disableAutoPan: true
+                });
+
+                polygon.addListener('mouseover', (event) => {
                     this.mapInfoWindows.forEach(iw => iw.close());
                     infoWindow.setPosition(event.latLng);
                     infoWindow.open(this.map);
                 });
+                polygon.addListener('mouseout', () => {
+                    infoWindow.close();
+                });
+                // Click still zooms to the plot
+                polygon.addListener('click', () => {
+                    this.zoomToGeometry(feature.geometry);
+                });
+
                 this.mapPolygons.push(polygon);
                 this.mapInfoWindows.push(infoWindow);
                 paths.forEach(p => bounds.extend(p));
@@ -931,7 +980,14 @@ class CadastralDataApp {
 
     zoomToPlot(plotId) {
         const f = this.features.find(x => x.properties._plotId === plotId);
-        if (f && f.geometry) this.zoomToGeometry(f.geometry);
+        if (f && f.geometry) {
+            window.switchView('map');
+            // Wait one tick for the map panel to become visible before fitting bounds
+            setTimeout(() => {
+                google.maps.event.trigger(this.map, 'resize');
+                this.zoomToGeometry(f.geometry);
+            }, 50);
+        }
     }
 
     zoomToGeometry(geometry) {
